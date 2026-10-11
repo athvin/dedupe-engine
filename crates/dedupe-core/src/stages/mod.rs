@@ -36,6 +36,18 @@ impl UidExpr {
         }
     }
 
+    /// Expression with no table alias (e.g. selecting node ids from a single
+    /// source table).
+    pub fn render_bare(&self) -> String {
+        match self {
+            UidExpr::Bare(col) => format!("\"{col}\""),
+            UidExpr::Composite {
+                source_dataset,
+                unique_id,
+            } => format!("\"{source_dataset}\" || '{CONCAT_SEPARATOR}' || \"{unique_id}\""),
+        }
+    }
+
     /// Same expression over `_l`/`_r`-suffixed columns (edge tables).
     pub fn render_suffixed(&self, suffix: &str) -> String {
         match self {

@@ -7,6 +7,7 @@
 //! fixtures under `fixtures/golden/`.
 
 pub mod blocking;
+pub mod clustering;
 pub mod comparison;
 pub mod error;
 pub mod model;
