@@ -9,14 +9,17 @@
 pub mod blocking;
 pub mod comparison;
 pub mod error;
+pub mod model;
 pub mod predict;
 pub mod scoring;
 pub mod session;
 pub mod settings;
 pub mod sql;
 pub mod stages;
+pub mod training;
 
 pub use error::{DedupeError, Result};
+pub use model::TrainedModel;
 pub use settings::Settings;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
