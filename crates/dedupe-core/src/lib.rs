@@ -10,6 +10,7 @@ pub mod blocking;
 pub mod clustering;
 pub mod comparison;
 pub mod error;
+pub mod linker;
 pub mod model;
 pub mod predict;
 pub mod scoring;
@@ -20,7 +21,10 @@ pub mod stages;
 pub mod training;
 
 pub use error::{DedupeError, Result};
+pub use linker::Linker;
 pub use model::TrainedModel;
+pub use session::ducklake::DuckLakeConfig;
+pub use session::{Session, SessionOptions};
 pub use settings::Settings;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

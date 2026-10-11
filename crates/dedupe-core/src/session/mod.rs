@@ -35,6 +35,13 @@ pub struct Session {
     conn: Connection,
     run_id: String,
     seq: Cell<u64>,
+    lake: Option<LakeAttachment>,
+}
+
+#[derive(Debug, Clone)]
+struct LakeAttachment {
+    alias: String,
+    schema: String,
 }
 
 impl Session {
@@ -51,11 +58,76 @@ impl Session {
             conn,
             run_id: format!("{nanos:08x}"),
             seq: Cell::new(0),
+            lake: None,
         })
     }
 
     pub fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Attach a DuckLake catalog. Intermediates still live in the native temp
+    /// catalog; the lake is used only to read inputs and write outputs. The
+    /// catalog is never `USE`d — all lake references are fully qualified.
+    pub fn attach_ducklake(&mut self, cfg: &ducklake::DuckLakeConfig) -> Result<()> {
+        self.conn
+            .execute_batch("INSTALL ducklake; LOAD ducklake;")?;
+        let mut options = Vec::new();
+        if let Some(dp) = &cfg.data_path {
+            options.push(format!("DATA_PATH '{}'", dp.replace('\'', "''")));
+        }
+        if cfg.read_only {
+            options.push("READ_ONLY".to_string());
+        }
+        // Pin catalog format: never auto-migrate behind our back.
+        options.push("AUTOMATIC_MIGRATION false".to_string());
+        let opts = if options.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", options.join(", "))
+        };
+        self.conn.execute_batch(&format!(
+            "ATTACH 'ducklake:{}' AS {}{opts};",
+            cfg.metadata.replace('\'', "''"),
+            cfg.alias
+        ))?;
+        if !cfg.read_only {
+            // Deterministic Parquet output (no catalog-inlined small writes).
+            self.conn.execute_batch(&format!(
+                "CALL {}.set_option('data_inlining_row_limit', 0);",
+                cfg.alias
+            ))?;
+        }
+        self.lake = Some(LakeAttachment {
+            alias: cfg.alias.clone(),
+            schema: cfg.schema.clone(),
+        });
+        Ok(())
+    }
+
+    fn lake(&self) -> Result<&LakeAttachment> {
+        self.lake
+            .as_ref()
+            .ok_or_else(|| DedupeError::Other("no DuckLake catalog attached".to_string()))
+    }
+
+    /// Register a table from the attached lake catalog under a templated name
+    /// (via a temp view, so downstream handling is uniform).
+    pub fn register_lake_table(&self, table: &str, templated: &str) -> Result<TableHandle> {
+        let lake = self.lake()?;
+        let qualified = format!("{}.{}.{}", lake.alias, lake.schema, table);
+        self.register_table(&qualified, templated)
+    }
+
+    /// Write a table into the lake in its own transaction (one writable
+    /// catalog per transaction).
+    pub fn write_to_lake(&self, src: &TableHandle, target: &str) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn.execute_batch(&format!(
+            "BEGIN; CREATE OR REPLACE TABLE {}.{}.{target} AS SELECT * FROM {}; COMMIT;",
+            lake.alias, lake.schema, src.physical
+        ))?;
+        Ok(())
     }
 
     fn next_physical(&self, templated: &str) -> String {
