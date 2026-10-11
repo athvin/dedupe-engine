@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/dedupe-core", "crates/dedupe-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/athvin/dedupe-engine"
+
+[workspace.dependencies]
+# Bundles DuckDB 1.5.5 — the exact engine version Splink 5.0.0's uv.lock resolves,
+# so golden fixtures and the Rust engine execute on identical DuckDB builds.
+duckdb = { version = "=1.10505.0", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sqlparser = { version = "0.63", features = ["visitor"] }
+thiserror = "2"
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+sha2 = "0.10"
+hex = "0.4"

@@ -1,0 +1,14 @@
+[project]
+name = "dedupe-engine-fixtures"
+version = "0.1.0"
+description = "Golden-fixture generator: runs real Splink 5.0.0 on sample data to produce the parity spec for dedupe-core"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "splink==5.0.0",
+    "duckdb==1.5.5",
+    "pyarrow>=18.0.0",
+    "pandas>=2.3.3",
+]
+
+[tool.uv]
+# Goldens are only valid for these exact versions; regenerate deliberately.
