@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-fn golden_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden/fake_1000")
+fn golden_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/golden")
 }
 
 fn sha256_hex(path: &Path) -> String {
@@ -17,7 +17,12 @@ fn sha256_hex(path: &Path) -> String {
 
 #[test]
 fn goldens_match_manifest() {
-    let dir = golden_dir();
+    for dataset in ["fake_1000", "historical_50k"] {
+        check_manifest(&golden_root().join(dataset));
+    }
+}
+
+fn check_manifest(dir: &Path) {
     let manifest_path = dir.join("MANIFEST.json");
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read MANIFEST.json"))
@@ -28,7 +33,7 @@ fn goldens_match_manifest() {
     assert!(!files.is_empty(), "manifest lists no files");
 
     let mut on_disk: Vec<String> = Vec::new();
-    collect_files(&dir, &dir, &mut on_disk);
+    collect_files(dir, dir, &mut on_disk);
 
     for (rel, expected) in &files {
         let actual = sha256_hex(&dir.join(rel));

@@ -609,6 +609,82 @@ def gen_incremental_goldens() -> None:
     )
 
 
+def gen_historical_50k() -> None:
+    """A second, larger golden dataset (50k rows, richer schema, higher null
+    rates) exercising the full pipeline at scale on a different distribution.
+    Compact predict output (no retained columns) to bound golden size."""
+    out = HERE / "golden" / "historical_50k"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    data = HERE / "datasets" / "historical_50k.parquet"
+
+    con, db_api = new_db_api()
+    df = pd.read_parquet(data)
+    sdf = db_api.register(df, dataset_display_name="h50k")
+
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        comparisons=[
+            cl.NameComparison("first_name"),
+            cl.NameComparison("surname"),
+            cl.LevenshteinAtThresholds("dob", 1),
+            cl.ExactMatch("birth_place").configure(term_frequency_adjustments=True),
+            cl.ExactMatch("postcode_fake").configure(term_frequency_adjustments=True),
+        ],
+        blocking_rules_to_generate_predictions=[
+            block_on("surname", "dob"),
+            block_on("postcode_fake", "first_name"),
+        ],
+        retain_matching_columns=False,
+        retain_intermediate_calculation_columns=False,
+    )
+    linker = Linker(sdf, settings)
+    linker.misc.save_model_to_json(out / "model_initial.json", overwrite=True)
+    linker.training.estimate_probability_two_random_records_match(
+        [block_on("first_name", "surname", "dob"), block_on("postcode_fake", "dob")],
+        recall=0.7,
+    )
+    linker.training.estimate_u_using_random_sampling(max_pairs=1e6)
+    linker.training.estimate_parameters_using_expectation_maximisation(
+        block_on("first_name"), estimate_without_term_frequencies=True
+    )
+    linker.training.estimate_parameters_using_expectation_maximisation(
+        block_on("surname"), estimate_without_term_frequencies=True
+    )
+    linker.misc.save_model_to_json(out / "model_final.json", overwrite=True)
+
+    predictions = linker.inference.predict()
+    con.execute(
+        f"COPY (SELECT unique_id_l, unique_id_r, match_key, match_weight, match_probability "
+        f"FROM {predictions.physical_name} "
+        f"ORDER BY unique_id_l, unique_id_r, match_key) TO '{out / 'predictions.parquet'}' (FORMAT PARQUET)"
+    )
+    clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
+        predictions, threshold_match_probability=CLUSTER_THRESHOLD
+    )
+    con.execute(
+        f"COPY (SELECT unique_id, cluster_id FROM {clusters.physical_name} ORDER BY unique_id) "
+        f"TO '{out / 'clusters.parquet'}' (FORMAT PARQUET)"
+    )
+
+    files = {
+        str(p.relative_to(out)): sha256(p)
+        for p in sorted(out.rglob("*"))
+        if p.is_file()
+    }
+    manifest = {
+        "dataset": "historical_50k",
+        "generated_with": {
+            "splink": splink.__version__,
+            "duckdb": duckdb.__version__,
+        },
+        "files": files,
+    }
+    (out / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    print(f"OK historical_50k: {len(files)} files")
+
+
 def main() -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -784,3 +860,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    gen_historical_50k()

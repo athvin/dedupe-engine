@@ -35,3 +35,13 @@ jobs:
           path: ~/.duckdb/extensions
           key: duckdb-extensions-${{ hashFiles('Cargo.toml') }}
       - run: cargo test -p dedupe-cli
+
+  scale-tests:
+    runs-on: ubuntu-latest
+    env:
+      DEDUPE_SCALE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p dedupe-core --test parity_historical_50k

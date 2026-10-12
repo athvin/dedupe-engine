@@ -50,8 +50,31 @@ pub fn assert_table_matches_parquet(
     exact: &[&str],
     approx: &[(&str, f64)],
 ) {
-    let golden = golden_dir().join(golden_file);
+    assert_table_matches_parquet_path(
+        session,
+        actual,
+        &golden_dir().join(golden_file),
+        keys,
+        exact,
+        approx,
+    );
+}
+
+/// As `assert_table_matches_parquet`, but with an absolute golden path (for
+/// datasets outside the default fake_1000 golden dir).
+pub fn assert_table_matches_parquet_path(
+    session: &Session,
+    actual: &TableHandle,
+    golden: &Path,
+    keys: &[&str],
+    exact: &[&str],
+    approx: &[(&str, f64)],
+) {
     let golden_str = golden.to_string_lossy().replace('\'', "''");
+    let golden_file = golden
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     let actual_count = session.count(&actual.physical).unwrap();
     let golden_count = session
