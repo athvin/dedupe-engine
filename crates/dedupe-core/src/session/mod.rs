@@ -69,6 +69,20 @@ pub struct SessionOptions {
     /// `Some(false)` drops insertion-order tracking to lower peak memory.
     /// `None` = DuckDB default (`true`).
     pub preserve_insertion_order: Option<bool>,
+    /// DuckDB extensions to `LOAD` at open, so their functions are usable in
+    /// comparison/blocking SQL — e.g. `"rapidfuzz"` (token_sort/token_set/
+    /// partial ratios) or `"splink_udfs"` (soundex, double_metaphone). The core
+    /// string metrics (`jaro_winkler_similarity`, `levenshtein`,
+    /// `damerau_levenshtein`, `jaccard`) are built in and need no extension.
+    pub extensions: Vec<String>,
+    /// DuckDB `extension_directory` — where pre-installed extension binaries
+    /// live. Bake these into the container image so loading needs no network
+    /// (`None` = DuckDB default, `~/.duckdb/extensions`).
+    pub extension_directory: Option<String>,
+    /// If `true`, `INSTALL <ext> FROM community` before loading (needs network;
+    /// for local/dev use). Default `false`: `LOAD` only, assuming the binaries
+    /// are already present/baked.
+    pub install_extensions: bool,
 }
 
 impl SessionOptions {
@@ -89,11 +103,9 @@ impl SessionOptions {
     #[must_use]
     pub fn performance(temp_directory: impl Into<String>) -> Self {
         Self {
-            threads: None,
-            memory_limit: None,
             temp_directory: Some(temp_directory.into()),
-            max_temp_directory_size: None,
             preserve_insertion_order: Some(false),
+            ..Self::default()
         }
     }
 
@@ -171,8 +183,7 @@ impl Session {
             use std::sync::atomic::{AtomicU64, Ordering};
             static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
             let n = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir()
-                .join(format!("dedupe-spill-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("dedupe-spill-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&dir)
                 .map_err(|e| DedupeError::Other(format!("creating spill directory: {e}")))?;
             opts.temp_directory = Some(dir.to_string_lossy().into_owned());
@@ -182,6 +193,7 @@ impl Session {
         };
 
         Self::apply_options(&conn, &opts)?;
+        Self::load_extensions(&conn, &opts)?;
         Ok(Session {
             conn,
             run_id,
@@ -213,8 +225,31 @@ impl Session {
         if let Some(preserve) = opts.preserve_insertion_order {
             stmts.push(format!("SET preserve_insertion_order = {preserve};"));
         }
+        if let Some(dir) = &opts.extension_directory {
+            stmts.push(format!("SET extension_directory = {};", quote(dir)));
+        }
         if !stmts.is_empty() {
             conn.execute_batch(&stmts.join("\n"))?;
+        }
+        Ok(())
+    }
+
+    /// `LOAD` (optionally `INSTALL`) the configured extensions so their
+    /// functions are available to generated SQL. Extension names are validated
+    /// as bare identifiers (no SQL injection). With `install_extensions` off
+    /// (the default) this is pure `LOAD` — no network — so bake the binaries
+    /// into the image and point `extension_directory` at them.
+    fn load_extensions(conn: &Connection, opts: &SessionOptions) -> Result<()> {
+        for ext in &opts.extensions {
+            if ext.is_empty() || !ext.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(DedupeError::settings(format!(
+                    "invalid extension name `{ext}` (expected a bare identifier)"
+                )));
+            }
+            if opts.install_extensions {
+                conn.execute_batch(&format!("INSTALL {ext} FROM community;"))?;
+            }
+            conn.execute_batch(&format!("LOAD {ext};"))?;
         }
         Ok(())
     }

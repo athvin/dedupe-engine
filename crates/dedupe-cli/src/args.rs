@@ -74,6 +74,19 @@ pub struct InputSource {
     /// Set this to run workloads larger than RAM.
     #[arg(long)]
     pub temp_dir: Option<String>,
+    /// DuckDB extension to LOAD so its functions are usable in comparison /
+    /// blocking SQL, e.g. `rapidfuzz` or `splink_udfs` (repeatable). Core
+    /// metrics (jaro_winkler, levenshtein, jaccard) need no extension.
+    #[arg(long = "extension")]
+    pub extensions: Vec<String>,
+    /// Directory holding pre-installed extension binaries (bake into the image
+    /// to avoid any runtime download). DuckDB `extension_directory`.
+    #[arg(long)]
+    pub extension_dir: Option<String>,
+    /// `INSTALL ... FROM community` before loading extensions (needs network;
+    /// for local/dev use). Default: LOAD only, assuming pre-baked binaries.
+    #[arg(long)]
+    pub install_extensions: bool,
     /// Link-type input dataset as NAME=REF (repeatable). REF is a lake table,
     /// or a path ending in .parquet/.csv. Use for link_only/link_and_dedupe;
     /// each NAME becomes a source_dataset. When given, overrides --input.

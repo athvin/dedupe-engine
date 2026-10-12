@@ -139,6 +139,51 @@ what frees the memory, so a run of N chunks leaves N snapshots; compact them
 afterwards with `dedupe maintenance --checkpoint`. Pair `--stream` with
 `--partition-by` to land the output already partitioned for downstream reads.
 
+## Everything runs inside DuckDB (no network, no Python UDFs)
+
+A common question is whether moving work into DuckDB UDFs would cut network
+overhead and speed things up. For *Python* Splink that matters (Python UDFs are
+slow and cross a process boundary). It does **not** apply here: DuckDB is
+statically bundled into this Rust binary and runs **in-process**, and the engine
+generates SQL that calls DuckDB's **native C++ built-ins**. There is no Python,
+no RPC, no DuckDB server — the whole pipeline (blocking, comparison vectors,
+scoring, TF, SQL connected-components) executes inside one process with zero
+network. The only network is DuckLake object-storage I/O, which is storage, not
+compute.
+
+What actually crosses the Rust↔DuckDB boundary is a handful of **small in-process
+aggregate pulls** (EM agreement-pattern counts, prior/u counts — all `O(levels)`
+or `O(distinct patterns)`), plus `edge_bridges`, which pulls the thresholded
+edge set to compute bridges with `petgraph` (DuckDB has no native bridge
+algorithm). Nothing streams the candidate pairs out of DuckDB.
+
+**Are the fuzzy-matching extensions faster?** Measured on 5M string pairs
+(DuckDB 1.5.5): the `rapidfuzz` community extension is the *same speed* as the
+built-ins for the functions we use — `jaro_winkler_similarity` 0.095s built-in
+vs 0.097s rapidfuzz; `levenshtein` 0.376s vs 0.344s. DuckDB's built-ins are
+already rapidfuzz-grade native C++, so there is no speedup to be had there.
+
+**What the extensions do add is capability**, not speed — functions DuckDB
+lacks natively, usable directly in comparison/blocking SQL so new logic stays
+in-engine:
+
+- `rapidfuzz` → `rapidfuzz_token_set_ratio` / `token_sort_ratio` /
+  `partial_ratio` (order-insensitive / substring name matching).
+- `splink_udfs` → `soundex`, `double_metaphone` (phonetic blocking keys).
+- `lsh` → MinHash/LSH blocking.
+
+Both `rapidfuzz` and `splink_udfs` load cleanly in the bundled build. Load them
+via `SessionOptions { extensions, extension_directory, install_extensions }` or
+the CLI `--extension rapidfuzz --extension-dir /opt/duckdb-ext`. Keep
+`install_extensions` off in production and **bake the extension binaries into the
+container image** (point `--extension-dir` at them) so loading needs no runtime
+network — exactly the air-gapped-pod pattern. Extension names are validated as
+bare identifiers, so they can't inject SQL.
+
+The core Fellegi-Sunter metrics — `jaro_winkler_similarity`, `levenshtein`,
+`damerau_levenshtein`, `jaccard`, `regexp_*` — are all built in and need no
+extension.
+
 ## DuckLake layout: partitioning & "clustering keys"
 
 DuckLake stores tables as Parquet files with a SQL catalog. It has **no

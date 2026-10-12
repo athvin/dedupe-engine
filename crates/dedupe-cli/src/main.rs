@@ -214,6 +214,9 @@ fn open_session(source: &InputSource) -> Result<Session> {
         memory_limit: source.memory_limit.clone(),
         temp_directory: source.temp_dir.clone(),
         preserve_insertion_order,
+        extensions: source.extensions.clone(),
+        extension_directory: source.extension_dir.clone(),
+        install_extensions: source.install_extensions,
         ..SessionOptions::default()
     })?;
     if let Some(catalog) = &source.catalog {
