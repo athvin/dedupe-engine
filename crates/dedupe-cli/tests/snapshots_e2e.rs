@@ -2,8 +2,8 @@
 //! list snapshots, and read the table as of each version. Gated behind
 //! DEDUPE_E2E_DUCKLAKE=1 (installs the ducklake extension).
 
-use dedupe_core::DuckLakeConfig;
 use dedupe_core::session::{Session, SessionOptions, TableHandle};
+use dedupe_core::{DuckLakeConfig, LakeWriteOptions};
 
 fn enabled() -> bool {
     std::env::var("DEDUPE_E2E_DUCKLAKE").as_deref() == Ok("1")
@@ -68,6 +68,80 @@ fn snapshots_and_time_travel() {
         .unwrap();
     assert_eq!(session.count(&at_v1.physical).unwrap(), 2);
     assert_eq!(session.count(&at_v2.physical).unwrap(), 4);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn partitioned_write_prunes_by_partition() {
+    if !enabled() {
+        eprintln!("skipping DuckLake partition e2e (set DEDUPE_E2E_DUCKLAKE=1 to run)");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join(format!("dedupe_part_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let data = tmp.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+
+    let mut session = Session::open_in_memory(SessionOptions::default()).unwrap();
+    session
+        .attach_ducklake(&DuckLakeConfig {
+            metadata: tmp.join("c.ducklake").to_string_lossy().into_owned(),
+            data_path: Some(data.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // 400 rows across 4 partition values of `g`, sorted within by `id`.
+    session
+        .execute_batch("CREATE TEMP TABLE stage AS SELECT i AS id, i % 4 AS g FROM range(400) t(i)")
+        .unwrap();
+    let staged = TableHandle {
+        templated: "stage".into(),
+        physical: "stage".into(),
+        columns: vec!["id".into(), "g".into()],
+    };
+
+    session
+        .write_to_lake_with(
+            &staged,
+            "parted",
+            &LakeWriteOptions {
+                partition_by: vec!["g".into()],
+                order_by: vec!["g".into(), "id".into()],
+            },
+        )
+        .unwrap();
+
+    // Data integrity: all rows present, correct per-partition counts.
+    let back = session
+        .register_lake_table("parted", "parted_view")
+        .unwrap();
+    assert_eq!(session.count(&back.physical).unwrap(), 400);
+    let per_g = session
+        .query_strings(&format!(
+            "SELECT g, count(*) FROM {} GROUP BY g ORDER BY g",
+            back.physical
+        ))
+        .unwrap();
+    assert_eq!(per_g.len(), 4);
+    for row in &per_g {
+        assert_eq!(row[1], "100", "each partition should hold 100 rows");
+    }
+
+    // One Parquet subtree per partition value proves physical partitioning.
+    let subtrees: Vec<_> = std::fs::read_dir(data.join("main").join("parted"))
+        .unwrap()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().is_dir())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("g="))
+        .collect();
+    assert_eq!(
+        subtrees.len(),
+        4,
+        "expected one Parquet partition subtree per distinct `g` value"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

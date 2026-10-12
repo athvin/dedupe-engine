@@ -27,7 +27,7 @@ fn reg(session: &Session, name: &str, templated: &str) -> TableHandle {
 
 #[test]
 fn graph_metrics_match_golden() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -73,7 +73,7 @@ fn graph_metrics_match_golden() {
 
 #[test]
 fn edge_bridges_match_golden() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -93,7 +93,7 @@ fn edge_bridges_match_golden() {
 
 #[test]
 fn multi_threshold_summary_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -122,7 +122,7 @@ fn multi_threshold_summary_matches_golden() {
 
 #[test]
 fn single_best_links_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let a = reg(&session, "link_df_a.parquet", "df_a");
     let b = reg(&session, "link_df_b.parquet", "df_b");
     let settings = Settings::from_json_str(&load_golden_text("link_link_only_model.json")).unwrap();

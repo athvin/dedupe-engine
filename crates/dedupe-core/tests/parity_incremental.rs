@@ -38,7 +38,7 @@ const GAMMA_COLS: &[&str] = &[
 
 #[test]
 fn predict_between_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
 
     let existing_input = register_parquet(&session, "incremental_existing.parquet", "existing");
@@ -70,7 +70,7 @@ fn predict_between_matches_golden() {
 
 #[test]
 fn predict_within_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
 
     let existing_input = register_parquet(&session, "incremental_existing.parquet", "existing");

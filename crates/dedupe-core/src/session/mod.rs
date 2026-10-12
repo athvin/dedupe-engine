@@ -14,6 +14,15 @@ use duckdb::Connection;
 use crate::error::{DedupeError, Result};
 use crate::sql::pipeline::CtePipeline;
 
+/// Quote each name as a DuckDB identifier (`"name"`, embedded `"` doubled)
+/// and join with `, ` — for building column lists from caller-supplied names.
+fn quote_ident_list(cols: &[String]) -> String {
+    cols.iter()
+        .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[derive(Debug, Clone)]
 pub struct TableHandle {
     /// Splink-style templated name, e.g. `__splink__df_concat`.
@@ -24,11 +33,90 @@ pub struct TableHandle {
     pub columns: Vec<String>,
 }
 
-#[derive(Default)]
+/// Tuning knobs applied to a [`Session`]'s DuckDB connection at open time.
+///
+/// The engine is a SQL generator — DuckDB does the actual compute — so these
+/// map directly onto DuckDB configuration and are the primary levers for
+/// scaling across CPUs and bounding memory:
+///
+/// - [`threads`](Self::threads): DuckDB parallelizes each query across this
+///   many worker threads. More cores → faster blocking/scoring/clustering with
+///   no code change. `None` = DuckDB's default (all logical cores).
+/// - [`memory_limit`](Self::memory_limit): hard cap on in-memory buffers; above
+///   it DuckDB spills intermediates to [`temp_directory`](Self::temp_directory)
+///   rather than OOM-ing, so a workload larger than RAM still completes.
+/// - [`preserve_insertion_order`](Self::preserve_insertion_order): `false` lets
+///   DuckDB drop row-order bookkeeping, cutting peak memory on large scans/joins
+///   (safe here — every stage is explicitly ordered when order matters).
+///
+/// Use [`SessionOptions::parity`] for deterministic single-thread runs (what
+/// the golden parity tests use) and [`SessionOptions::performance`] for a
+/// throughput-oriented production default.
+#[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
-    /// None = DuckDB default. Parity tests use Some(1) so float aggregation
-    /// order matches the golden-generation runs.
+    /// Worker threads per query. `None` = DuckDB default (all logical cores).
+    /// Parity tests pin `Some(1)` so float aggregation order matches the
+    /// golden-generation runs.
     pub threads: Option<u32>,
+    /// In-memory buffer cap, e.g. `"8GB"` / `"75%"`. `None` = DuckDB default
+    /// (~80% of RAM). Beyond it DuckDB spills to `temp_directory`.
+    pub memory_limit: Option<String>,
+    /// Directory for spilling intermediates larger than `memory_limit`.
+    /// `None` = DuckDB default. Set this to run larger-than-RAM workloads.
+    pub temp_directory: Option<String>,
+    /// Cap on the spill directory, e.g. `"100GB"`. `None` = DuckDB default.
+    pub max_temp_directory_size: Option<String>,
+    /// `Some(false)` drops insertion-order tracking to lower peak memory.
+    /// `None` = DuckDB default (`true`).
+    pub preserve_insertion_order: Option<bool>,
+}
+
+impl SessionOptions {
+    /// Deterministic single-thread configuration used by the golden parity
+    /// tests: `threads = 1` keeps floating-point aggregation order stable so
+    /// results match the Python/DuckDB golden-generation runs byte-for-byte.
+    #[must_use]
+    pub fn parity() -> Self {
+        Self {
+            threads: Some(1),
+            ..Self::default()
+        }
+    }
+
+    /// Throughput-oriented configuration: use all CPU cores, relax
+    /// insertion-order bookkeeping to cut peak memory, and spill to
+    /// `temp_directory` so workloads larger than memory still complete.
+    #[must_use]
+    pub fn performance(temp_directory: impl Into<String>) -> Self {
+        Self {
+            threads: None,
+            memory_limit: None,
+            temp_directory: Some(temp_directory.into()),
+            max_temp_directory_size: None,
+            preserve_insertion_order: Some(false),
+        }
+    }
+
+    /// Set the worker-thread count (builder style).
+    #[must_use]
+    pub fn with_threads(mut self, threads: u32) -> Self {
+        self.threads = Some(threads);
+        self
+    }
+
+    /// Set the in-memory buffer cap, e.g. `"8GB"` (builder style).
+    #[must_use]
+    pub fn with_memory_limit(mut self, limit: impl Into<String>) -> Self {
+        self.memory_limit = Some(limit.into());
+        self
+    }
+
+    /// Set the spill directory for larger-than-memory workloads (builder style).
+    #[must_use]
+    pub fn with_temp_directory(mut self, dir: impl Into<String>) -> Self {
+        self.temp_directory = Some(dir.into());
+        self
+    }
 }
 
 pub struct Session {
@@ -54,19 +142,44 @@ pub struct Snapshot {
 impl Session {
     pub fn open_in_memory(opts: SessionOptions) -> Result<Session> {
         let conn = Connection::open_in_memory()?;
-        if let Some(threads) = opts.threads {
-            conn.execute_batch(&format!("SET threads = {threads};"))?;
-        }
+        Self::apply_options(&conn, &opts)?;
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.subsec_nanos());
         Ok(Session {
             conn,
             run_id: format!("{nanos:08x}"),
             seq: Cell::new(0),
             lake: None,
         })
+    }
+
+    /// Apply [`SessionOptions`] as DuckDB `SET` statements. String-valued
+    /// options are single-quote-escaped before interpolation.
+    fn apply_options(conn: &Connection, opts: &SessionOptions) -> Result<()> {
+        fn quote(v: &str) -> String {
+            format!("'{}'", v.replace('\'', "''"))
+        }
+        let mut stmts: Vec<String> = Vec::new();
+        if let Some(threads) = opts.threads {
+            stmts.push(format!("SET threads = {threads};"));
+        }
+        if let Some(limit) = &opts.memory_limit {
+            stmts.push(format!("SET memory_limit = {};", quote(limit)));
+        }
+        if let Some(dir) = &opts.temp_directory {
+            stmts.push(format!("SET temp_directory = {};", quote(dir)));
+        }
+        if let Some(size) = &opts.max_temp_directory_size {
+            stmts.push(format!("SET max_temp_directory_size = {};", quote(size)));
+        }
+        if let Some(preserve) = opts.preserve_insertion_order {
+            stmts.push(format!("SET preserve_insertion_order = {preserve};"));
+        }
+        if !stmts.is_empty() {
+            conn.execute_batch(&stmts.join("\n"))?;
+        }
+        Ok(())
     }
 
     pub fn connection(&self) -> &Connection {
@@ -130,11 +243,50 @@ impl Session {
     /// catalog per transaction). Returns the snapshot version created by the
     /// commit (DuckLake records one snapshot per transaction).
     pub fn write_to_lake(&self, src: &TableHandle, target: &str) -> Result<i64> {
+        self.write_to_lake_with(src, target, &ducklake::LakeWriteOptions::default())
+    }
+
+    /// Write `src` to the lake with an explicit physical layout
+    /// ([`LakeWriteOptions`](ducklake::LakeWriteOptions)): partition columns
+    /// and/or a sort order. Partitioning uses the empty-create → `SET
+    /// PARTITIONED BY` → ordered `INSERT` sequence so the *initial* load is
+    /// partitioned (DuckLake only partitions data written after the ALTER).
+    /// All within one transaction (DuckLake allows one writable catalog per
+    /// transaction). Returns the resulting snapshot version.
+    pub fn write_to_lake_with(
+        &self,
+        src: &TableHandle,
+        target: &str,
+        opts: &ducklake::LakeWriteOptions,
+    ) -> Result<i64> {
         let lake = self.lake()?;
-        self.conn.execute_batch(&format!(
-            "BEGIN; CREATE OR REPLACE TABLE {}.{}.{target} AS SELECT * FROM {}; COMMIT;",
-            lake.alias, lake.schema, src.physical
-        ))?;
+        let full = format!("{}.{}.{target}", lake.alias, lake.schema);
+        let order_clause = if opts.order_by.is_empty() {
+            String::new()
+        } else {
+            format!(" ORDER BY {}", quote_ident_list(&opts.order_by))
+        };
+
+        let sql = if opts.partition_by.is_empty() {
+            format!(
+                "BEGIN; CREATE OR REPLACE TABLE {full} AS SELECT * FROM {}{order_clause}; COMMIT;",
+                src.physical
+            )
+        } else {
+            // Partitioning only applies to data written after `SET PARTITIONED
+            // BY`, so create the table empty (schema only), set partitioning,
+            // then insert the rows (ordered if requested).
+            format!(
+                "BEGIN; \
+                 CREATE OR REPLACE TABLE {full} AS SELECT * FROM {src} WHERE false; \
+                 ALTER TABLE {full} SET PARTITIONED BY ({parts}); \
+                 INSERT INTO {full} SELECT * FROM {src}{order_clause}; \
+                 COMMIT;",
+                src = src.physical,
+                parts = quote_ident_list(&opts.partition_by),
+            )
+        };
+        self.conn.execute_batch(&sql)?;
         self.latest_snapshot_version()
     }
 

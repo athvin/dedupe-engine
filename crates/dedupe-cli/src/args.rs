@@ -59,9 +59,18 @@ pub struct InputSource {
     /// Read input directly from a Parquet file instead of the lake.
     #[arg(long)]
     pub input_parquet: Option<String>,
-    /// Pin DuckDB thread count (use 1 for bit-reproducible float aggregation).
+    /// Pin DuckDB thread count (use 1 for bit-reproducible float aggregation;
+    /// omit to use all CPU cores).
     #[arg(long)]
     pub threads: Option<u32>,
+    /// In-memory buffer cap, e.g. `8GB` or `75%`. Beyond it DuckDB spills to
+    /// `--temp-dir` instead of OOM-ing.
+    #[arg(long)]
+    pub memory_limit: Option<String>,
+    /// Directory for spilling intermediates larger than `--memory-limit`.
+    /// Set this to run workloads larger than RAM.
+    #[arg(long)]
+    pub temp_dir: Option<String>,
     /// Link-type input dataset as NAME=REF (repeatable). REF is a lake table,
     /// or a path ending in .parquet/.csv. Use for link_only/link_and_dedupe;
     /// each NAME becomes a source_dataset. When given, overrides --input.
@@ -70,6 +79,28 @@ pub struct InputSource {
     /// Read lake inputs as of this snapshot version (DuckLake time travel).
     #[arg(long)]
     pub as_of_version: Option<i64>,
+    /// Partition the output lake table by these columns (repeatable). Writes
+    /// one Parquet subtree per value so filtered reads skip non-matching
+    /// files. DuckLake has no secondary indexes; this + sort-on-write are the
+    /// pruning levers. Good choices: source_dataset, a batch/date column.
+    #[arg(long = "partition-by")]
+    pub partition_by: Vec<String>,
+    /// Sort the output lake table by these columns on write (repeatable).
+    /// Tightens each Parquet file's min/max statistics — DuckLake's
+    /// clustering-key equivalent.
+    #[arg(long = "order-by")]
+    pub order_by: Vec<String>,
+}
+
+impl InputSource {
+    /// Physical layout options for writing results back to the lake.
+    #[must_use]
+    pub fn lake_write_options(&self) -> dedupe_core::LakeWriteOptions {
+        dedupe_core::LakeWriteOptions {
+            partition_by: self.partition_by.clone(),
+            order_by: self.order_by.clone(),
+        }
+    }
 }
 
 #[derive(Args, Debug)]

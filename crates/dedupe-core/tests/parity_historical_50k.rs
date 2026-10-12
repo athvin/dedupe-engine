@@ -71,14 +71,17 @@ fn historical_50k_training_matches_golden() {
         eprintln!("skipping historical_50k scale test (set DEDUPE_SCALE_TESTS=1)");
         return;
     }
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = register(&session);
     let settings = Settings::from_json_str(&golden_text("model_initial.json")).unwrap();
     let mut model = TrainedModel::new(settings);
     let concat = predict::materialize_concat(&session, &input).unwrap();
     let tf = predict::materialize_tf_tables(&session, &model.settings, &concat).unwrap();
 
-    let det: Vec<String> = DETERMINISTIC_RULES.iter().map(|s| s.to_string()).collect();
+    let det: Vec<String> = DETERMINISTIC_RULES
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     estimate_prior(&session, &mut model, &concat, &det, 0.7).unwrap();
     estimate_u(
         &session,
@@ -149,7 +152,7 @@ fn historical_50k_predict_and_cluster_match_golden() {
         eprintln!("skipping historical_50k scale test (set DEDUPE_SCALE_TESTS=1)");
         return;
     }
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = register(&session);
     let settings = Settings::from_json_str(&golden_text("model_final.json")).unwrap();
 

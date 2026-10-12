@@ -508,7 +508,10 @@ pub fn cluster_using_single_best_links(
     let uid = uid_expr_for(settings);
     let sd = &settings.source_dataset_column;
     let threshold = pyrepr(threshold_match_probability);
-    let dup_free: Vec<&str> = duplicate_free_datasets.iter().map(|s| s.as_str()).collect();
+    let dup_free: Vec<&str> = duplicate_free_datasets
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
 
     // Symmetric neighbours above threshold, carrying source datasets.
     let neighbours = materialize_sql(

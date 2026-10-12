@@ -27,7 +27,7 @@ pub mod training;
 pub use error::{DedupeError, Result};
 pub use linker::Linker;
 pub use model::TrainedModel;
-pub use session::ducklake::DuckLakeConfig;
+pub use session::ducklake::{DuckLakeConfig, LakeWriteOptions};
 pub use session::{Session, SessionOptions};
 pub use settings::Settings;
 

@@ -83,7 +83,7 @@ fn deterministic_link(a: DeterministicLinkArgs) -> Result<()> {
         write_parquet(&session, &pairs, path)?;
     }
     if a.source.catalog.is_some() {
-        session.write_to_lake(&pairs, &a.output)?;
+        session.write_to_lake_with(&pairs, &a.output, &a.source.lake_write_options())?;
         eprintln!("wrote {n} deterministic pairs to lake table `{}`", a.output);
     } else if a.output_parquet.is_none() {
         bail!("no output target: provide --catalog (lake) or --output-parquet");
@@ -113,6 +113,9 @@ fn snapshots(a: SnapshotsArgs) -> Result<()> {
 fn open_session(source: &InputSource) -> Result<Session> {
     let mut session = Session::open_in_memory(SessionOptions {
         threads: source.threads,
+        memory_limit: source.memory_limit.clone(),
+        temp_directory: source.temp_dir.clone(),
+        ..SessionOptions::default()
     })?;
     if let Some(catalog) = &source.catalog {
         let cfg = DuckLakeConfig {
@@ -163,13 +166,17 @@ fn register_ref(
     templated: &str,
     as_of_version: Option<i64>,
 ) -> Result<TableHandle> {
-    if reference.ends_with(".parquet") {
-        let p = reference.replace('\'', "''");
-        Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?)
-    } else if reference.ends_with(".csv") {
-        Ok(session.register_csv(Path::new(reference), templated, &[])?)
-    } else {
-        register_lake(session, reference, templated, as_of_version)
+    let ext = Path::new(reference)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("parquet") => {
+            let p = reference.replace('\'', "''");
+            Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?)
+        }
+        Some("csv") => Ok(session.register_csv(Path::new(reference), templated, &[])?),
+        _ => register_lake(session, reference, templated, as_of_version),
     }
 }
 
@@ -259,7 +266,7 @@ fn predict(a: PredictArgs) -> Result<()> {
         write_parquet(&session, &predictions, path)?;
     }
     if a.source.catalog.is_some() {
-        session.write_to_lake(&predictions, &a.output)?;
+        session.write_to_lake_with(&predictions, &a.output, &a.source.lake_write_options())?;
         eprintln!("wrote {n} predictions to lake table `{}`", a.output);
     } else if a.output_parquet.is_none() {
         bail!("no output target: provide --catalog (lake) or --output-parquet");
@@ -290,7 +297,7 @@ fn cluster(a: ClusterArgs) -> Result<()> {
         write_parquet(&session, &clusters, path)?;
     }
     if a.source.catalog.is_some() {
-        session.write_to_lake(&clusters, &a.output)?;
+        session.write_to_lake_with(&clusters, &a.output, &a.source.lake_write_options())?;
         eprintln!("wrote {n} clustered rows to lake table `{}`", a.output);
     } else if a.output_parquet.is_none() {
         bail!("no output target: provide --catalog (lake) or --output-parquet");
@@ -349,7 +356,7 @@ fn link_new(a: LinkNewArgs) -> Result<()> {
         write_parquet(&session, &result, path)?;
     }
     if a.source.catalog.is_some() {
-        session.write_to_lake(&result, &a.output)?;
+        session.write_to_lake_with(&result, &a.output, &a.source.lake_write_options())?;
         eprintln!(
             "wrote {n} incremental predictions to lake table `{}`",
             a.output
@@ -411,7 +418,7 @@ fn cluster_new(a: ClusterNewArgs) -> Result<()> {
         write_parquet(&session, &joined, path)?;
     }
     if a.source.catalog.is_some() {
-        session.write_to_lake(&joined, &a.output)?;
+        session.write_to_lake_with(&joined, &a.output, &a.source.lake_write_options())?;
         eprintln!("wrote {n} clustered rows to lake table `{}`", a.output);
     } else if a.output_parquet.is_none() {
         bail!("no output target: provide --catalog (lake) or --output-parquet");
@@ -526,7 +533,7 @@ fn accuracy(a: AccuracyArgs) -> Result<()> {
         write_parquet(&session, &truth_space, path)?;
     }
     if a.source.catalog.is_some() {
-        session.write_to_lake(&truth_space, &a.output)?;
+        session.write_to_lake_with(&truth_space, &a.output, &a.source.lake_write_options())?;
         eprintln!("wrote {n} truth-space rows to lake table `{}`", a.output);
     } else if a.output_parquet.is_none() {
         bail!("no output target: provide --catalog (lake) or --output-parquet");

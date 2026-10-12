@@ -49,7 +49,7 @@ fn opts() -> ClusterOptions {
 
 #[test]
 fn incremental_cluster_equals_full_recluster() {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
 
     // Existing (900), new (100), and the full set (1000) of nodes.

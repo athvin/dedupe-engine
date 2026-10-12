@@ -44,6 +44,10 @@ pub struct DetailedRecord {
 }
 
 /// Python `statistics.median`: for even n, the mean of the two middle values.
+// Keep the literal `(a + b) / 2.0` form (not `f64::midpoint`) so the result is
+// bit-identical to Splink's Python `statistics.median` used to generate the
+// golden parameter estimates — the EM/median parity gates compare to 1e-10.
+#[allow(clippy::manual_midpoint)]
 pub fn median(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -119,7 +123,7 @@ impl TrainedModel {
         };
 
         for (ci, c) in self.settings.comparisons.iter_mut().enumerate() {
-            for level in c.levels.iter_mut() {
+            for level in &mut c.levels {
                 if level.is_null_level {
                     continue;
                 }

@@ -67,7 +67,7 @@ impl Settings {
             .iter()
             .enumerate()
             .map(|(i, br)| compile_blocking_rule(i, br))
-            .collect::<Result<_>>()?;
+            .collect();
 
         Ok(Settings {
             link_type: json.link_type,
@@ -127,10 +127,10 @@ impl Settings {
     }
 }
 
-fn compile_blocking_rule(index: usize, br: &BlockingRuleJson) -> Result<BlockingRule> {
-    Ok(BlockingRule {
+fn compile_blocking_rule(index: usize, br: &BlockingRuleJson) -> BlockingRule {
+    BlockingRule {
         index,
         sql: br.sql().to_string(),
         arrays_to_explode: br.arrays_to_explode().to_vec(),
-    })
+    }
 }

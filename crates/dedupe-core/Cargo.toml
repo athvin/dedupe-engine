@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Fellegi-Sunter record linkage engine (Splink 5 port) targeting DuckLake"
 
+[lints]
+workspace = true
+
 [dependencies]
 duckdb = { workspace = true }
 serde = { workspace = true }

@@ -23,7 +23,7 @@ struct Ctx {
 }
 
 fn setup() -> (Ctx, TrainedModel) {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -50,9 +50,8 @@ fn golden_m_history(name: &str) -> BTreeMap<(String, i64, i64), f64> {
         if r["is_null_level"].as_bool().unwrap_or(false) {
             continue;
         }
-        let m = match r["m_probability"].as_f64() {
-            Some(v) => v,
-            None => continue,
+        let Some(m) = r["m_probability"].as_f64() else {
+            continue;
         };
         out.insert(
             (

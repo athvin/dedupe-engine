@@ -165,7 +165,7 @@ impl Comparison {
         let mut counter = n_nonnull as i32 - 1;
         let default_m = default_m_values(n_nonnull);
         let default_u = default_u_values(n_nonnull);
-        for level in levels.iter_mut() {
+        for level in &mut levels {
             if level.is_null_level {
                 level.gamma = -1;
             } else {
@@ -230,7 +230,7 @@ impl Comparison {
     }
 
     pub fn has_tf_adjustments(&self) -> bool {
-        self.levels.iter().any(|l| l.has_tf_adjustments())
+        self.levels.iter().any(ComparisonLevel::has_tf_adjustments)
     }
 
     /// TF-adjusted input columns of this comparison, deduped preserving order.

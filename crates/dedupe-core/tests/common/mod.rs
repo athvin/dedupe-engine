@@ -2,6 +2,7 @@
 //! binary compiles this module but uses only the helpers it needs.
 #![allow(dead_code)]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 pub fn golden_dir() -> PathBuf {
@@ -136,7 +137,7 @@ pub fn assert_table_matches_parquet_path(
             .query_scalar_f64(&format!("SELECT count(*)::DOUBLE {base} WHERE {pred}"))
             .unwrap() as i64;
         if n > 0 {
-            report.push_str(&format!("  column {name}: {n} mismatches\n"));
+            let _ = writeln!(report, "  column {name}: {n} mismatches");
             let key_sel = keys
                 .iter()
                 .map(|k| format!("coalesce(a.\"{k}\", g.\"{k}\") as \"{k}\""))
@@ -153,7 +154,7 @@ pub fn assert_table_matches_parquet_path(
                 ))
                 .unwrap();
             for row in rows {
-                report.push_str(&format!("    {}\n", row.join(" | ")));
+                let _ = writeln!(report, "    {}", row.join(" | "));
             }
         }
     }

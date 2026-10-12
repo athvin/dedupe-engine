@@ -199,7 +199,7 @@ fn truth_space_sql(
     };
 
     format!(
-        r#"WITH
+        r"WITH
 __splink__labels_with_pos_neg as (
     select *,
         {truth_thres_expr} as truth_threshold,
@@ -290,7 +290,7 @@ select
         else cast((TP*TN)-(FP*FN) as float8)/sqrt((TP+FP)*P*N*(TN+FN)) end as phi
 from __splink__labels_with_pos_neg_grouped_with_truth_stats
 where truth_threshold >= cast(-998 as float8)
-order by truth_threshold"#
+order by truth_threshold"
     )
 }
 

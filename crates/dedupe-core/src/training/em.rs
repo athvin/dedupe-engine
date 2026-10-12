@@ -298,7 +298,10 @@ fn materialize_agreement_patterns(
     working: &[WorkingComparison],
     vectors: &TableHandle,
 ) -> Result<TableHandle> {
-    let gammas: Vec<String> = working.iter().map(|c| c.gamma_column_name()).collect();
+    let gammas: Vec<String> = working
+        .iter()
+        .map(WorkingComparison::gamma_column_name)
+        .collect();
     let group = gammas.join(", ");
     let sql = format!(
         "select {group}, count(*) as agreement_pattern_count\nfrom {}\ngroup by {group}",
@@ -365,7 +368,7 @@ fn run_counts(
         "select\n    CASE WHEN ({mw_expr}) >= 0 THEN 1.0 / (1.0 + POWER(cast(2 as float8), -({mw_expr}))) ELSE POWER(cast(2 as float8), ({mw_expr})) / (1.0 + POWER(cast(2 as float8), ({mw_expr}))) END as match_probability,\n    {},\n    agreement_pattern_count\nfrom __splink__df_match_weight_parts",
         working
             .iter()
-            .map(|c| c.gamma_column_name())
+            .map(WorkingComparison::gamma_column_name)
             .collect::<Vec<_>>()
             .join(",\n    ")
     );
@@ -475,7 +478,7 @@ pub fn run_em_session(
         let (counts, lambda_num) = run_counts(session, &working, lambda, &patterns)?;
 
         // M-step. Normalize m and u per comparison over non-null levels.
-        for c in working.iter_mut() {
+        for c in &mut working {
             let Some(level_counts) = counts.get(&c.output_column_name) else {
                 continue;
             };
@@ -491,26 +494,23 @@ pub fn run_em_session(
                 .filter(|(g, _)| **g != -1)
                 .map(|(_, (_, u))| u)
                 .sum();
-            for level in c.levels.iter_mut() {
+            for level in &mut c.levels {
                 if level.is_null {
                     continue;
                 }
-                match level_counts.get(&level.gamma) {
-                    Some((m_count, u_count)) => {
-                        if !opts.fix_m && !level.fix_m {
-                            level.m = ProbValue::Value(m_count / m_total);
-                        }
-                        if !opts.fix_u && !level.fix_u {
-                            level.u = ProbValue::Value(u_count / u_total);
-                        }
+                if let Some((m_count, u_count)) = level_counts.get(&level.gamma) {
+                    if !opts.fix_m && !level.fix_m {
+                        level.m = ProbValue::Value(m_count / m_total);
                     }
-                    None => {
-                        if !opts.fix_m && !level.fix_m {
-                            level.m = ProbValue::NotObserved;
-                        }
-                        if !opts.fix_u && !level.fix_u {
-                            level.u = ProbValue::NotObserved;
-                        }
+                    if !opts.fix_u && !level.fix_u {
+                        level.u = ProbValue::Value(u_count / u_total);
+                    }
+                } else {
+                    if !opts.fix_m && !level.fix_m {
+                        level.m = ProbValue::NotObserved;
+                    }
+                    if !opts.fix_u && !level.fix_u {
+                        level.u = ProbValue::NotObserved;
                     }
                 }
             }

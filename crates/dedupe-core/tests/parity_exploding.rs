@@ -25,7 +25,7 @@ fn exploding_predictions_match_golden() {
     let people = dir.join("people.parquet");
     let people_str = people.to_string_lossy().replace('\'', "''");
 
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     // Register the parquet (preserving the LIST `tokens` column) as the input.
     let input = session
         .register_table(&format!("read_parquet('{people_str}')"), "people")

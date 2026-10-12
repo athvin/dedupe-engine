@@ -27,6 +27,7 @@ impl CtePipeline {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_input(mut self, handle: &TableHandle) -> Self {
         self.add_input(handle);
         self

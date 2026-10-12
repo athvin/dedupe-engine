@@ -61,7 +61,7 @@ fn mw_cols() -> Vec<(&'static str, f64)> {
 }
 
 fn run_inference(link_type: &str) {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let settings =
         Settings::from_json_str(&load_golden_text(&format!("link_{link_type}_model.json")))
             .unwrap();
@@ -108,7 +108,7 @@ fn run_inference(link_type: &str) {
 }
 
 fn run_training(link_type: &str) {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text(&format!(
         "link_{link_type}_model_initial.json"
     )))
@@ -117,7 +117,10 @@ fn run_training(link_type: &str) {
     let concat = setup(&session, &model.settings);
     let tf = predict::materialize_tf_tables(&session, &model.settings, &concat).unwrap();
 
-    let det: Vec<String> = DETERMINISTIC_RULES.iter().map(|s| s.to_string()).collect();
+    let det: Vec<String> = DETERMINISTIC_RULES
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     estimate_prior(&session, &mut model, &concat, &det, RECALL).unwrap();
     estimate_u(
         &session,

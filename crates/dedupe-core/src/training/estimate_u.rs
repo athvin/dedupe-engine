@@ -136,11 +136,12 @@ fn count_pipeline(
 
     // Dedup/cross condition by link type: link_only keeps only cross-dataset
     // pairs (the two_dataset split produces the same pair set).
-    let mut where_dedupe = format!("where {uid_l} < {uid_r}");
-    if settings.link_type == crate::settings::json::LinkType::LinkOnly {
+    let where_dedupe = if settings.link_type == crate::settings::json::LinkType::LinkOnly {
         let sd = &settings.source_dataset_column;
-        where_dedupe.push_str(&format!(" and l.\"{sd}\" != r.\"{sd}\""));
-    }
+        format!("where {uid_l} < {uid_r} and l.\"{sd}\" != r.\"{sd}\"")
+    } else {
+        format!("where {uid_l} < {uid_r}")
+    };
     let chunk = chunk_filter_sql(settings, chunk_num, num_chunks);
     let blocked_sql = format!(
         "select\n{uid_l} as join_key_l,\n{uid_r} as join_key_r,\n{blocking_cols},\n'0' as match_key\nfrom {sample} as l\ninner join {sample} as r\non\n(1=1)\n{where_dedupe}{chunk}",

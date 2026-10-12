@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "CLI for dedupe-core: train/predict/cluster against a DuckLake catalog"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "dedupe"
 path = "src/main.rs"

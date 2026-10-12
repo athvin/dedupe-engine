@@ -46,6 +46,9 @@ fn d_tf_prefix() -> String {
 fn d_gamma_prefix() -> String {
     "gamma_".to_string()
 }
+// serde `skip_serializing_if` predicates must have signature `fn(&T) -> bool`,
+// so the `&bool` is mandated by the serde API, not a style choice.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
 }

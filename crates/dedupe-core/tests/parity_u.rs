@@ -22,7 +22,7 @@ const DETERMINISTIC_RULES: &[&str] = &[
 const RECALL: f64 = 0.7;
 
 fn setup() -> (Session, TableHandle) {
-    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -38,7 +38,10 @@ fn model() -> TrainedModel {
 fn prior_matches_golden() {
     let (session, concat) = setup();
     let mut m = model();
-    let det: Vec<String> = DETERMINISTIC_RULES.iter().map(|s| s.to_string()).collect();
+    let det: Vec<String> = DETERMINISTIC_RULES
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     let prior = estimate_prior(&session, &mut m, &concat, &det, RECALL).unwrap();
 
     let golden = load_golden_json("model_after_prior.json");

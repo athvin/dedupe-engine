@@ -75,7 +75,10 @@ pub fn materialize_blocked_pairs(
     let uid = uid_expr_for(settings);
     let rules = &settings.blocking_rules;
 
-    if !rules.iter().any(|r| r.is_exploding()) {
+    if !rules
+        .iter()
+        .any(super::blocking::BlockingRule::is_exploding)
+    {
         // Fast path: no array explosion, a single UNION-ALL of scalar arms.
         let mut p = CtePipeline::new().with_input(concat);
         p.enqueue(
