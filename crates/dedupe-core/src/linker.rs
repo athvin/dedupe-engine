@@ -36,8 +36,19 @@ impl<'a> Linker<'a> {
     /// Build a linker over an already-registered input table (e.g. from a CSV
     /// or a lake table). Materializes `__splink__df_concat` and the TF tables.
     pub fn new(session: &'a Session, settings: Settings, input: &TableHandle) -> Result<Self> {
+        Self::new_multi(session, settings, &[(input, "")])
+    }
+
+    /// Build a linker over one or more registered inputs. For link types, each
+    /// `(table, display_name)` becomes a `source_dataset`; for dedupe a single
+    /// input is used.
+    pub fn new_multi(
+        session: &'a Session,
+        settings: Settings,
+        inputs: &[(&TableHandle, &str)],
+    ) -> Result<Self> {
         let model = TrainedModel::new(settings);
-        let concat = predict::materialize_concat(session, input)?;
+        let concat = predict::materialize_concat_multi(session, inputs, &model.settings)?;
         let tf_tables = predict::materialize_tf_tables(session, &model.settings, &concat)?;
         Ok(Linker {
             session,

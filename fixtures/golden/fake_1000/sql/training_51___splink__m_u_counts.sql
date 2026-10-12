@@ -1,6 +1,6 @@
 -- templated: __splink__m_u_counts
--- physical: __splink__m_u_counts_f1e3bc16a
-CREATE TABLE __splink__m_u_counts_f1e3bc16a AS
+-- physical: __splink__m_u_counts_be94b88b7
+CREATE TABLE __splink__m_u_counts_be94b88b7 AS
 WITH
 
 __splink__df_match_weight_parts as (
@@ -60,7 +60,7 @@ __splink__df_match_weight_parts as (
             cast(-15.844196459832137 as float8)
     END as mw_email,
     agreement_pattern_count
-    from __splink__agreement_pattern_counts_7a8b3c86a
+    from __splink__agreement_pattern_counts_49875c50d
 ), 
 
 __splink__df_predict as (

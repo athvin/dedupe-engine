@@ -66,6 +66,48 @@ fn register_input(session: &Session, source: &InputSource, templated: &str) -> R
     bail!("no input specified: use --input (lake), --input-csv, or --input-parquet");
 }
 
+/// Register a reference that is a lake table, a .parquet file, or a .csv file.
+fn register_ref(session: &Session, reference: &str, templated: &str) -> Result<TableHandle> {
+    if reference.ends_with(".parquet") {
+        let p = reference.replace('\'', "''");
+        Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?)
+    } else if reference.ends_with(".csv") {
+        Ok(session.register_csv(Path::new(reference), templated, &[])?)
+    } else {
+        Ok(session.register_lake_table(reference, templated)?)
+    }
+}
+
+/// Resolve the input datasets. With `--dataset NAME=REF` entries, returns one
+/// (handle, display_name) per dataset (link types); otherwise a single input
+/// with an empty display name (dedupe).
+fn resolve_inputs(session: &Session, source: &InputSource) -> Result<Vec<(TableHandle, String)>> {
+    if source.datasets.is_empty() {
+        return Ok(vec![(
+            register_input(session, source, "input_table")?,
+            String::new(),
+        )]);
+    }
+    let mut out = Vec::new();
+    for (i, spec) in source.datasets.iter().enumerate() {
+        let (name, reference) = spec
+            .split_once('=')
+            .with_context(|| format!("--dataset must be NAME=REF, got `{spec}`"))?;
+        let handle = register_ref(session, reference, &format!("input_dataset_{i}"))?;
+        out.push((handle, name.to_string()));
+    }
+    Ok(out)
+}
+
+fn build_linker<'a>(
+    session: &'a Session,
+    settings: Settings,
+    inputs: &'a [(TableHandle, String)],
+) -> Result<Linker<'a>> {
+    let refs: Vec<(&TableHandle, &str)> = inputs.iter().map(|(h, n)| (h, n.as_str())).collect();
+    Ok(Linker::new_multi(session, settings, &refs)?)
+}
+
 fn train(a: TrainArgs) -> Result<()> {
     if a.deterministic_rules.is_empty() {
         bail!("train requires at least one --deterministic-rule");
@@ -73,9 +115,9 @@ fn train(a: TrainArgs) -> Result<()> {
     let settings =
         Settings::from_json_file(Path::new(&a.settings)).context("loading settings JSON")?;
     let session = open_session(&a.source)?;
-    let input = register_input(&session, &a.source, "input_table")?;
+    let inputs = resolve_inputs(&session, &a.source)?;
 
-    let mut linker = Linker::new(&session, settings, &input)?;
+    let mut linker = build_linker(&session, settings, &inputs)?;
     let outcome = linker.train(&TrainConfig {
         deterministic_rules: a.deterministic_rules,
         recall: a.recall,
@@ -107,9 +149,9 @@ fn train(a: TrainArgs) -> Result<()> {
 fn predict(a: PredictArgs) -> Result<()> {
     let settings = Settings::from_json_file(Path::new(&a.model)).context("loading model JSON")?;
     let session = open_session(&a.source)?;
-    let input = register_input(&session, &a.source, "input_table")?;
+    let inputs = resolve_inputs(&session, &a.source)?;
 
-    let linker = Linker::new(&session, settings, &input)?;
+    let linker = build_linker(&session, settings, &inputs)?;
     let predictions = linker.predict(a.threshold_match_probability)?;
     let n = session.count(&predictions.physical)?;
 
@@ -129,7 +171,7 @@ fn predict(a: PredictArgs) -> Result<()> {
 fn cluster(a: ClusterArgs) -> Result<()> {
     let settings = Settings::from_json_file(Path::new(&a.model)).context("loading model JSON")?;
     let session = open_session(&a.source)?;
-    let input = register_input(&session, &a.source, "input_table")?;
+    let inputs = resolve_inputs(&session, &a.source)?;
 
     let predictions = if let Some(parquet) = &a.predictions_parquet {
         let p = parquet.replace('\'', "''");
@@ -140,7 +182,7 @@ fn cluster(a: ClusterArgs) -> Result<()> {
         bail!("no predictions specified: use --predictions (lake) or --predictions-parquet");
     };
 
-    let linker = Linker::new(&session, settings, &input)?;
+    let linker = build_linker(&session, settings, &inputs)?;
     let clusters = linker.cluster(&predictions, a.threshold)?;
     let n = session.count(&clusters.physical)?;
 

@@ -1,6 +1,6 @@
 -- templated: __splink__df_comparison_vectors
--- physical: __splink__df_comparison_vectors_df60ea7aa
-CREATE TABLE __splink__df_comparison_vectors_df60ea7aa AS
+-- physical: __splink__df_comparison_vectors_6818e7aa8
+CREATE TABLE __splink__df_comparison_vectors_6818e7aa8 AS
 
     select
     "unique_id_l",

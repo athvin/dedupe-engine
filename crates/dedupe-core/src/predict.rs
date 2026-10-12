@@ -22,6 +22,28 @@ pub fn materialize_concat(session: &Session, input: &TableHandle) -> Result<Tabl
     session.materialize(&p)
 }
 
+/// Materialize `__splink__df_concat` from multiple registered inputs (link
+/// types), prepending each dataset's display name as the `source_dataset`
+/// literal. Column order comes from the first input.
+pub fn materialize_concat_multi(
+    session: &Session,
+    inputs: &[(&TableHandle, &str)],
+    settings: &Settings,
+) -> Result<TableHandle> {
+    if inputs.len() == 1 && !settings.source_dataset_required() {
+        return materialize_concat(session, inputs[0].0);
+    }
+    // Inputs are referenced by physical name inside the union SQL, so they are
+    // NOT registered as pipeline inputs (that would rewrite the source_dataset
+    // string literals).
+    let mut p = CtePipeline::new();
+    p.enqueue(
+        concat::concat_sql_union(inputs, &settings.source_dataset_column),
+        DF_CONCAT,
+    );
+    session.materialize(&p)
+}
+
 /// Compute and materialize one TF table per TF column (the cached artifacts).
 pub fn materialize_tf_tables(
     session: &Session,

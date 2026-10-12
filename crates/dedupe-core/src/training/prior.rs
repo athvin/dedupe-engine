@@ -14,9 +14,31 @@ use crate::sql::pipeline::CtePipeline;
 use crate::stages::block::blocked_id_pairs_sql;
 use crate::stages::uid_expr_for;
 
-/// Total possible comparisons for the dedupe path: C(N, 2).
-fn total_possible_comparisons_dedupe(n: i64) -> f64 {
-    (n as f64) * ((n - 1) as f64) / 2.0
+/// Total possible comparisons (the cartesian count) by link type, matching
+/// Splink's `calculate_cartesian`:
+/// - dedupe_only / link_and_dedupe: `N*(N-1)/2` over the concat
+/// - link_only: `((Σnᵢ)² − Σnᵢ²)/2` over per-dataset counts
+fn total_possible_comparisons(
+    session: &Session,
+    concat: &TableHandle,
+    settings: &crate::settings::Settings,
+) -> Result<f64> {
+    match settings.link_type {
+        LinkType::DedupeOnly | LinkType::LinkAndDedupe => {
+            let n = session.count(&concat.physical)? as f64;
+            Ok(n * (n - 1.0) / 2.0)
+        }
+        LinkType::LinkOnly => {
+            let rows = session.query_strings(&format!(
+                "select count(*) from {} group by \"{}\"",
+                concat.physical, settings.source_dataset_column
+            ))?;
+            let counts: Vec<f64> = rows.iter().map(|r| r[0].parse::<f64>().unwrap()).collect();
+            let sum: f64 = counts.iter().sum();
+            let sum_sq: f64 = counts.iter().map(|c| c * c).sum();
+            Ok((sum * sum - sum_sq) / 2.0)
+        }
+    }
 }
 
 /// Estimate the prior from deterministic rules and write it into the model.
@@ -32,14 +54,8 @@ pub fn estimate_prior(
             "recall must be in (0, 1], got {recall}"
         )));
     }
-    if model.settings.link_type != LinkType::DedupeOnly {
-        return Err(DedupeError::Other(
-            "prior estimation currently supports dedupe_only".to_string(),
-        ));
-    }
 
-    let total_nodes = session.count(&concat.physical)?;
-    let num_total_comparisons = total_possible_comparisons_dedupe(total_nodes);
+    let num_total_comparisons = total_possible_comparisons(session, concat, &model.settings)?;
 
     let rules: Vec<BlockingRule> = deterministic_rules
         .iter()

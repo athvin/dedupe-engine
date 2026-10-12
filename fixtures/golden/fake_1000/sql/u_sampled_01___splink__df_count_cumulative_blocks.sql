@@ -1,6 +1,6 @@
 -- templated: __splink__df_count_cumulative_blocks
--- physical: __splink__df_count_cumulative_blocks_5b9aa9dbf
-CREATE TABLE __splink__df_count_cumulative_blocks_5b9aa9dbf AS
+-- physical: __splink__df_count_cumulative_blocks_1e0824939
+CREATE TABLE __splink__df_count_cumulative_blocks_1e0824939 AS
 WITH
 
 __splink__df_concat as (

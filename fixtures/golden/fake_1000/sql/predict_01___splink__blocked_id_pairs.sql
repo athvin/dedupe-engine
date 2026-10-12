@@ -1,6 +1,6 @@
 -- templated: __splink__blocked_id_pairs
--- physical: __splink__blocked_id_pairs_2ffe27a5a
-CREATE TABLE __splink__blocked_id_pairs_2ffe27a5a AS
+-- physical: __splink__blocked_id_pairs_ceb7a8871
+CREATE TABLE __splink__blocked_id_pairs_ceb7a8871 AS
 select
 '0' as match_key,
 l."unique_id" as join_key_l,

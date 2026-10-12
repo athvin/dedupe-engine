@@ -134,7 +134,13 @@ fn count_pipeline(
     }
     let blocking_cols = blocking_cols.join(",\n");
 
-    let where_dedupe = format!("where {uid_l} < {uid_r}");
+    // Dedup/cross condition by link type: link_only keeps only cross-dataset
+    // pairs (the two_dataset split produces the same pair set).
+    let mut where_dedupe = format!("where {uid_l} < {uid_r}");
+    if settings.link_type == crate::settings::json::LinkType::LinkOnly {
+        let sd = &settings.source_dataset_column;
+        where_dedupe.push_str(&format!(" and l.\"{sd}\" != r.\"{sd}\""));
+    }
     let chunk = chunk_filter_sql(settings, chunk_num, num_chunks);
     let blocked_sql = format!(
         "select\n{uid_l} as join_key_l,\n{uid_r} as join_key_r,\n{blocking_cols},\n'0' as match_key\nfrom {sample} as l\ninner join {sample} as r\non\n(1=1)\n{where_dedupe}{chunk}",
@@ -221,9 +227,23 @@ pub fn estimate_u(
     assert!(opts.num_chunks >= 1, "num_chunks must be >= 1");
     let settings = &model.settings;
 
-    let total_nodes = session.count(&concat.physical)?;
-    let sample_size = rows_needed_for_n_pairs(opts.max_pairs);
-    let mut proportion = sample_size / total_nodes as f64;
+    let total_nodes = session.count(&concat.physical)? as f64;
+    // Sampling proportion by link type (Splink): dedupe/link_and_dedupe invert
+    // the pairs-from-rows formula; link_only uses sqrt(max_pairs / total_links)
+    // over the pairwise cross-dataset total.
+    let mut proportion = if settings.link_type == crate::settings::json::LinkType::LinkOnly {
+        let rows = session.query_strings(&format!(
+            "select count(*) from {} group by \"{}\"",
+            concat.physical, settings.source_dataset_column
+        ))?;
+        let counts: Vec<f64> = rows.iter().map(|r| r[0].parse::<f64>().unwrap()).collect();
+        let sum: f64 = counts.iter().sum();
+        let sum_sq: f64 = counts.iter().map(|c| c * c).sum();
+        let total_links = (sum * sum - sum_sq) / 2.0;
+        (opts.max_pairs / total_links).sqrt()
+    } else {
+        rows_needed_for_n_pairs(opts.max_pairs) / total_nodes
+    };
     if proportion >= 1.0 {
         proportion = 1.0;
     }

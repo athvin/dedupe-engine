@@ -232,6 +232,77 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def link_settings(link_type: str) -> SettingsCreator:
+    return SettingsCreator(
+        link_type=link_type,
+        comparisons=[
+            cl.ExactMatch("first_name"),
+            cl.ExactMatch("surname"),
+            cl.ExactMatch("dob"),
+            cl.ExactMatch("city").configure(term_frequency_adjustments=True),
+            cl.ExactMatch("email").configure(term_frequency_adjustments=True),
+        ],
+        blocking_rules_to_generate_predictions=[
+            block_on("first_name"),
+            block_on("surname"),
+        ],
+        retain_intermediate_calculation_columns=True,
+    )
+
+
+def gen_link_goldens(link_type: str) -> None:
+    """Train + predict + cluster for a given link type on two datasets derived
+    from fake_1000 (even unique_id -> df_a, odd -> df_b)."""
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    a = df[df.unique_id % 2 == 0].copy()
+    b = df[df.unique_id % 2 == 1].copy()
+    sa = db_api.register(a, dataset_display_name="df_a")
+    sb = db_api.register(b, dataset_display_name="df_b")
+    con.execute(
+        f"COPY (SELECT * FROM {sa.physical_name} ORDER BY unique_id) "
+        f"TO '{OUT / 'link_df_a.parquet'}' (FORMAT PARQUET)"
+    )
+    con.execute(
+        f"COPY (SELECT * FROM {sb.physical_name} ORDER BY unique_id) "
+        f"TO '{OUT / 'link_df_b.parquet'}' (FORMAT PARQUET)"
+    )
+
+    linker = Linker([sa, sb], link_settings(link_type))
+    linker.misc.save_model_to_json(
+        OUT / f"link_{link_type}_model_initial.json", overwrite=True
+    )
+    linker.training.estimate_probability_two_random_records_match(
+        [block_on("first_name", "dob"), block_on("email")], recall=RECALL
+    )
+    # max_pairs high enough that no sampling filter fires (deterministic u).
+    linker.training.estimate_u_using_random_sampling(max_pairs=MAX_PAIRS_TUTORIAL)
+    linker.training.estimate_parameters_using_expectation_maximisation(
+        block_on("first_name"), estimate_without_term_frequencies=True
+    )
+    linker.training.estimate_parameters_using_expectation_maximisation(
+        block_on("dob"), estimate_without_term_frequencies=True
+    )
+    linker.misc.save_model_to_json(OUT / f"link_{link_type}_model.json", overwrite=True)
+
+    predictions = linker.inference.predict()
+    export_table(
+        con,
+        predictions.physical_name,
+        OUT / f"link_{link_type}_predictions.parquet",
+        "source_dataset_l, unique_id_l, source_dataset_r, unique_id_r, match_key",
+    )
+    clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
+        predictions, threshold_match_probability=CLUSTER_THRESHOLD
+    )
+    export_table(
+        con,
+        clusters.physical_name,
+        OUT / f"link_{link_type}_clusters.parquet",
+        "source_dataset, unique_id",
+    )
+
+
 def gen_incremental_goldens() -> None:
     con, db_api = new_db_api()
     df = pd.read_csv(DATA)
@@ -399,6 +470,12 @@ def main() -> None:
     # trained model and term frequencies computed from the existing data.
     # ------------------------------------------------------------------
     gen_incremental_goldens()
+
+    # ------------------------------------------------------------------
+    # Link types: link_only and link_and_dedupe over two datasets.
+    # ------------------------------------------------------------------
+    gen_link_goldens("link_only")
+    gen_link_goldens("link_and_dedupe")
 
     # ------------------------------------------------------------------
     # Manifest.

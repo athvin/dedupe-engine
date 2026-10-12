@@ -1,6 +1,6 @@
 -- templated: __splink__df_comparison_vectors
--- physical: __splink__df_comparison_vectors_9c7a8fb66
-CREATE TABLE __splink__df_comparison_vectors_9c7a8fb66 AS
+-- physical: __splink__df_comparison_vectors_14d55e90c
+CREATE TABLE __splink__df_comparison_vectors_14d55e90c AS
 WITH
 
 __splink__df_concat as (
@@ -18,15 +18,15 @@ __splink__df_concat as (
 __splink__df_concat_with_tf as (
     select
         __splink__df_concat.*,
-        __splink__df_tf_surname_c36195692."tf_surname",
-        __splink__df_tf_email_c87f87c88."tf_email",
-        __splink__df_tf_first_name_9c8f2b270."tf_first_name",
-        __splink__df_tf_city_e8e3ab24d."tf_city"
+        __splink__df_tf_surname_e96e2162c."tf_surname",
+        __splink__df_tf_email_b349a64a8."tf_email",
+        __splink__df_tf_city_cc332cc14."tf_city",
+        __splink__df_tf_first_name_a70dee059."tf_first_name"
         from __splink__df_concat
-        left join __splink__df_tf_surname_c36195692 on __splink__df_concat."surname" = __splink__df_tf_surname_c36195692."surname"
-    left join __splink__df_tf_email_c87f87c88 on __splink__df_concat."email" = __splink__df_tf_email_c87f87c88."email"
-    left join __splink__df_tf_first_name_9c8f2b270 on __splink__df_concat."first_name" = __splink__df_tf_first_name_9c8f2b270."first_name"
-    left join __splink__df_tf_city_e8e3ab24d on __splink__df_concat."city" = __splink__df_tf_city_e8e3ab24d."city"
+        left join __splink__df_tf_surname_e96e2162c on __splink__df_concat."surname" = __splink__df_tf_surname_e96e2162c."surname"
+    left join __splink__df_tf_email_b349a64a8 on __splink__df_concat."email" = __splink__df_tf_email_b349a64a8."email"
+    left join __splink__df_tf_city_cc332cc14 on __splink__df_concat."city" = __splink__df_tf_city_cc332cc14."city"
+    left join __splink__df_tf_first_name_a70dee059 on __splink__df_concat."first_name" = __splink__df_tf_first_name_a70dee059."first_name"
 ), 
 
 blocked_with_cols as (
@@ -50,7 +50,7 @@ blocked_with_cols as (
     "l"."tf_email" AS "tf_email_l",
     "r"."tf_email" AS "tf_email_r",
     b.match_key
-    from __splink__blocked_id_pairs_cf4713523 as b
+    from __splink__blocked_id_pairs_bc7debc8f as b
     inner join __splink__df_concat_with_tf as l
     on l."unique_id" = b.join_key_l
     inner join __splink__df_concat_with_tf as r

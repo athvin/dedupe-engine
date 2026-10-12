@@ -1,6 +1,6 @@
 -- templated: __splink__df_comparison_vectors
--- physical: __splink__df_comparison_vectors_a96ca62d1
-CREATE TABLE __splink__df_comparison_vectors_a96ca62d1 AS
+-- physical: __splink__df_comparison_vectors_734e8609b
+CREATE TABLE __splink__df_comparison_vectors_734e8609b AS
 WITH
 
 __splink__df_concat as (
@@ -18,11 +18,11 @@ __splink__df_concat as (
 __splink__df_concat_with_tf as (
     select
         __splink__df_concat.*,
-        __splink__df_tf_email_c87f87c88."tf_email",
-        __splink__df_tf_city_e8e3ab24d."tf_city"
+        __splink__df_tf_email_b349a64a8."tf_email",
+        __splink__df_tf_city_cc332cc14."tf_city"
         from __splink__df_concat
-        left join __splink__df_tf_email_c87f87c88 on __splink__df_concat."email" = __splink__df_tf_email_c87f87c88."email"
-    left join __splink__df_tf_city_e8e3ab24d on __splink__df_concat."city" = __splink__df_tf_city_e8e3ab24d."city"
+        left join __splink__df_tf_email_b349a64a8 on __splink__df_concat."email" = __splink__df_tf_email_b349a64a8."email"
+    left join __splink__df_tf_city_cc332cc14 on __splink__df_concat."city" = __splink__df_tf_city_cc332cc14."city"
 ), 
 
 blocked_with_cols as (
@@ -44,7 +44,7 @@ blocked_with_cols as (
     "l"."first_name" AS "first_name_l",
     "r"."first_name" AS "first_name_r",
     b.match_key
-    from __splink__blocked_id_pairs_b07863deb as b
+    from __splink__blocked_id_pairs_29d6c3581 as b
     inner join __splink__df_concat_with_tf as l
     on l."unique_id" = b.join_key_l
     inner join __splink__df_concat_with_tf as r

@@ -49,6 +49,11 @@ pub struct InputSource {
     /// Pin DuckDB thread count (use 1 for bit-reproducible float aggregation).
     #[arg(long)]
     pub threads: Option<u32>,
+    /// Link-type input dataset as NAME=REF (repeatable). REF is a lake table,
+    /// or a path ending in .parquet/.csv. Use for link_only/link_and_dedupe;
+    /// each NAME becomes a source_dataset. When given, overrides --input.
+    #[arg(long = "dataset")]
+    pub datasets: Vec<String>,
 }
 
 #[derive(Args, Debug)]
