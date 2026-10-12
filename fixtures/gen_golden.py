@@ -386,6 +386,12 @@ def gen_batch2_goldens() -> None:
     gm = linker.clustering.compute_graph_metrics(preds, clusters)
     export_table(con, gm.nodes.physical_name, OUT / "graph_metrics_nodes.parquet", "composite_unique_id")
     export_table(con, gm.clusters.physical_name, OUT / "graph_metrics_clusters.parquet", "cluster_id")
+    # Edge bridges (requires igraph: run gen with `uv run --with igraph`).
+    if "is_bridge" in gm.edges.as_pandas_dataframe().columns:
+        export_table(
+            con, gm.edges.physical_name, OUT / "graph_metrics_edges.parquet",
+            "composite_unique_id_l, composite_unique_id_r",
+        )
 
     # Multi-threshold clustering summary stats.
     nodes_tbl = db_api.register(df[["unique_id"]].copy(), dataset_display_name="nodes_only")

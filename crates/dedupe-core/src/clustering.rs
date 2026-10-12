@@ -358,6 +358,95 @@ pub fn graph_metrics(
     Ok((nodes, clusters))
 }
 
+/// Edge metrics with `is_bridge` (Splink's igraph edge metric, computed
+/// natively in Rust with petgraph — no Python dependency). A bridge is an edge
+/// whose removal increases the number of connected components. Returns a table
+/// `(composite_unique_id_l, composite_unique_id_r, is_bridge)`, one row per
+/// thresholded prediction edge, orientation preserved.
+pub fn edge_bridges(
+    session: &Session,
+    settings: &Settings,
+    predictions: &TableHandle,
+    threshold_match_probability: f64,
+) -> Result<TableHandle> {
+    use petgraph::algo::bridges;
+    use petgraph::graphmap::UnGraphMap;
+    use petgraph::visit::EdgeRef;
+
+    let uid = uid_expr_for(settings);
+    let threshold = pyrepr(threshold_match_probability);
+
+    // Thresholded edges with a stable edge id and string endpoint keys.
+    let truncated = materialize_sql(
+        session,
+        &[predictions],
+        format!(
+            "select {l} as composite_unique_id_l, {r} as composite_unique_id_r,\n  cast({l} as varchar) as l_key, cast({r} as varchar) as r_key,\n  row_number() over (order by {l}, {r}) - 1 as eid\nfrom {p}\nwhere match_probability >= {threshold}",
+            l = uid.render_suffixed("l"),
+            r = uid.render_suffixed("r"),
+            p = predictions.templated,
+        ),
+        "__splink__truncated_edges",
+    )?;
+
+    let rows = session.query_strings(&format!(
+        "select eid, l_key, r_key from {}",
+        truncated.physical
+    ))?;
+
+    // Build the undirected graph over deduped unordered pairs (dropping
+    // self-loops), matching igraph's simple-graph semantics.
+    let mut graph: UnGraphMap<&str, ()> = UnGraphMap::new();
+    let unordered_key = |a: &str, b: &str| -> (String, String) {
+        if a <= b {
+            (a.to_string(), b.to_string())
+        } else {
+            (b.to_string(), a.to_string())
+        }
+    };
+    let mut seen_pairs = std::collections::HashSet::new();
+    for r in &rows {
+        let (a, b) = (r[1].as_str(), r[2].as_str());
+        if a == b {
+            continue; // self-loop: never a bridge
+        }
+        let key = unordered_key(a, b);
+        if seen_pairs.insert(key) {
+            graph.add_edge(a, b, ());
+        }
+    }
+
+    // Collect bridge edges as unordered key set.
+    let mut bridge_keys = std::collections::HashSet::new();
+    for e in bridges(&graph) {
+        bridge_keys.insert(unordered_key(e.source(), e.target()));
+    }
+
+    // Edge ids whose unordered pair is a bridge.
+    let bridge_eids: Vec<String> = rows
+        .iter()
+        .filter(|r| bridge_keys.contains(&unordered_key(&r[1], &r[2])))
+        .map(|r| r[0].clone())
+        .collect();
+
+    let is_bridge_expr = if bridge_eids.is_empty() {
+        "false".to_string()
+    } else {
+        format!("eid in ({})", bridge_eids.join(", "))
+    };
+    let mut p = CtePipeline::new().with_input(&truncated);
+    p.enqueue(
+        format!(
+            "select composite_unique_id_l, composite_unique_id_r, ({is_bridge_expr}) as is_bridge from {}",
+            truncated.templated
+        ),
+        "__splink__graph_metrics_edges",
+    );
+    let out = session.materialize(&p)?;
+    session.drop_table(&truncated)?;
+    Ok(out)
+}
+
 /// Per-threshold cluster summary stats (Splink's
 /// `cluster_pairwise_predictions_at_multiple_thresholds` with
 /// `output_cluster_summary_stats=True`): one row per threshold with

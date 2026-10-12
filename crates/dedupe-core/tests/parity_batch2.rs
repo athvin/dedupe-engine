@@ -10,7 +10,7 @@ use common::{
 use dedupe_core::Settings;
 use dedupe_core::clustering::{
     ClusterOptions, cluster_at_threshold, cluster_summary_at_thresholds,
-    cluster_using_single_best_links, clustered_with_input_data, graph_metrics,
+    cluster_using_single_best_links, clustered_with_input_data, edge_bridges, graph_metrics,
 };
 use dedupe_core::predict;
 use dedupe_core::session::{Session, SessionOptions, TableHandle};
@@ -68,6 +68,26 @@ fn graph_metrics_match_golden() {
             ("density", 1e-9),
             ("cluster_centralisation", 1e-9),
         ],
+    );
+}
+
+#[test]
+fn edge_bridges_match_golden() {
+    let session = Session::open_in_memory(SessionOptions { threads: Some(1) }).unwrap();
+    let input = session
+        .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
+        .unwrap();
+    let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
+    let predictions = predict::run_predict(&session, &settings, &input, None).unwrap();
+
+    let edges = edge_bridges(&session, &settings, &predictions, THRESHOLD).unwrap();
+    assert_table_matches_parquet(
+        &session,
+        &edges,
+        "graph_metrics_edges.parquet",
+        &["composite_unique_id_l", "composite_unique_id_r"],
+        &["is_bridge"],
+        &[],
     );
 }
 

@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
+petgraph = "0.8"
 
 [dev-dependencies]
 anyhow = { workspace = true }
