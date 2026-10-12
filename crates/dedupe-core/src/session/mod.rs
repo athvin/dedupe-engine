@@ -33,6 +33,49 @@ pub struct TableHandle {
     pub columns: Vec<String>,
 }
 
+/// A temp table dropped (best-effort) when this guard goes out of scope —
+/// including on early `?` returns. Call [`into_handle`](Self::into_handle) to
+/// keep the table alive past the guard (e.g. to return it as an output).
+/// Derefs to [`TableHandle`], so `&TempTable` passes anywhere a
+/// `&TableHandle` is expected.
+pub struct TempTable<'s> {
+    session: &'s Session,
+    handle: Option<TableHandle>,
+}
+
+impl<'s> TempTable<'s> {
+    pub fn new(session: &'s Session, handle: TableHandle) -> Self {
+        TempTable {
+            session,
+            handle: Some(handle),
+        }
+    }
+
+    pub fn handle(&self) -> &TableHandle {
+        self.handle.as_ref().expect("TempTable handle taken")
+    }
+
+    /// Release ownership: the table is no longer dropped by this guard.
+    pub fn into_handle(mut self) -> TableHandle {
+        self.handle.take().expect("TempTable handle taken")
+    }
+}
+
+impl Drop for TempTable<'_> {
+    fn drop(&mut self) {
+        if let Some(h) = &self.handle {
+            let _ = self.session.drop_table(h);
+        }
+    }
+}
+
+impl std::ops::Deref for TempTable<'_> {
+    type Target = TableHandle;
+    fn deref(&self) -> &TableHandle {
+        self.handle()
+    }
+}
+
 /// Tuning knobs applied to a [`Session`]'s DuckDB connection at open time.
 ///
 /// The engine is a SQL generator — DuckDB does the actual compute — so these
@@ -662,6 +705,12 @@ impl Session {
         })
     }
 
+    /// As [`materialize`](Self::materialize), returning a drop guard that
+    /// removes the temp table when it goes out of scope.
+    pub fn materialize_temp(&self, pipeline: &CtePipeline) -> Result<TempTable<'_>> {
+        Ok(TempTable::new(self, self.materialize(pipeline)?))
+    }
+
     pub fn drop_table(&self, handle: &TableHandle) -> Result<()> {
         self.conn
             .execute_batch(&format!("DROP TABLE IF EXISTS {}", handle.physical))?;
@@ -685,14 +734,10 @@ impl Session {
     /// and small result sets). NULL renders as "NULL".
     pub fn query_strings(&self, sql: &str) -> Result<Vec<Vec<String>>> {
         let mut stmt = self.conn.prepare(sql)?;
-        let ncols = {
-            let rows = stmt.query([])?;
-            let _ = rows;
-            stmt.column_count()
-        };
-        let mut out = Vec::new();
         let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
         while let Some(row) = rows.next()? {
+            let ncols = row.as_ref().column_count();
             let mut rendered = Vec::with_capacity(ncols);
             for i in 0..ncols {
                 let v: duckdb::types::Value = row.get(i)?;

@@ -205,12 +205,11 @@ fn run_chunk(
     num_chunks: u32,
 ) -> Result<Vec<(i32, f64)>> {
     let pipeline = count_pipeline(settings, comparison, sample, chunk_num, num_chunks);
-    let counts = session.materialize(&pipeline)?;
+    let counts = session.materialize_temp(&pipeline)?;
     let rows = session.query_strings(&format!(
         "select comparison_vector_value, u_count from {}",
         counts.physical
     ))?;
-    session.drop_table(&counts)?;
     Ok(rows
         .into_iter()
         .map(|r| (r[0].parse::<i32>().unwrap(), r[1].parse::<f64>().unwrap()))
@@ -256,7 +255,7 @@ pub fn estimate_u(
         format!("select *\nfrom {}\nwhere 1=1\n{filter}", concat.templated),
         "__splink__df_concat_sample",
     );
-    let sample = session.materialize(&sp)?;
+    let sample = session.materialize_temp(&sp)?;
 
     let rhs_num_chunks = opts.num_chunks;
     // Collect estimates before mutating the model (borrow hygiene).
@@ -310,7 +309,7 @@ pub fn estimate_u(
         }
     }
 
-    session.drop_table(&sample)?;
+    drop(sample);
 
     for (key, estimate) in estimates {
         model.add_u_estimate(key, estimate, EstimateSource::USampling);

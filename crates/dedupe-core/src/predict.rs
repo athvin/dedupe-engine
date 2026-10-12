@@ -5,7 +5,7 @@
 //! re-derived as a CTE.
 
 use crate::error::Result;
-use crate::session::{Session, TableHandle};
+use crate::session::{Session, TableHandle, TempTable};
 use crate::settings::Settings;
 use crate::sql::pipeline::CtePipeline;
 use crate::stages::block::{self, BLOCKED_ID_PAIRS};
@@ -136,7 +136,7 @@ fn materialize_blocked_pairs_exploding(
     };
 
     // One materialized marginal table per exploding rule.
-    let mut marginals: Vec<(usize, TableHandle)> = Vec::new();
+    let mut marginals: Vec<(usize, TempTable)> = Vec::new();
     for (i, rule) in rules.iter().enumerate() {
         if !rule.is_exploding() {
             continue;
@@ -160,7 +160,7 @@ fn materialize_blocked_pairs_exploding(
             marginal_sql,
             block::marginal_exploded_table_name(rule.index),
         );
-        marginals.push((rule.index, session.materialize(&mp)?));
+        marginals.push((rule.index, session.materialize_temp(&mp)?));
     }
 
     let marginal_refs: Vec<(usize, String)> = marginals
@@ -187,12 +187,34 @@ fn materialize_blocked_pairs_exploding(
         block::dedup_non_unique_sql(block::BLOCKED_ID_PAIRS_NON_UNIQUE),
         BLOCKED_ID_PAIRS,
     );
-    let out = session.materialize(&p)?;
+    session.materialize(&p)
+}
 
-    for (_, h) in &marginals {
-        session.drop_table(h)?;
-    }
-    Ok(out)
+/// Materialize blocked id pairs for an explicit set of scalar rules — the
+/// training and evaluation paths that block on ad-hoc rules rather than the
+/// settings' own.
+pub(crate) fn materialize_blocked_pairs_scalar<'s>(
+    session: &'s Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    rules: &[crate::blocking::BlockingRule],
+    name: &str,
+) -> Result<TempTable<'s>> {
+    let uid = uid_expr_for(settings);
+    let mut p = CtePipeline::new().with_input(concat);
+    p.enqueue(
+        block::blocked_id_pairs_sql(
+            rules,
+            &uid,
+            settings.link_type,
+            &settings.source_dataset_column,
+            concat.templated.as_str(),
+            &[],
+            None,
+        ),
+        name,
+    );
+    session.materialize_temp(&p)
 }
 
 /// Pipeline from blocked id pairs through `__splink__df_comparison_vectors`.
@@ -235,8 +257,13 @@ pub fn deterministic_link(
     tf_tables: &[TableHandle],
 ) -> Result<TableHandle> {
     let uid = uid_expr_for(settings);
-    let blocked = materialize_blocked_pairs(session, settings, concat)?;
-    let mut p = CtePipeline::new().with_input(concat).with_input(&blocked);
+    let blocked = TempTable::new(
+        session,
+        materialize_blocked_pairs(session, settings, concat)?,
+    );
+    let mut p = CtePipeline::new()
+        .with_input(concat)
+        .with_input(blocked.handle());
     for t in tf_tables {
         p.add_input(t);
     }
@@ -248,9 +275,7 @@ pub fn deterministic_link(
         vectors::blocked_with_cols_sql(settings, &uid),
         BLOCKED_WITH_COLS,
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&blocked)?;
-    Ok(out)
+    session.materialize(&p)
 }
 
 /// Full predict pipeline: comparison vectors -> match weight parts ->
@@ -316,34 +341,82 @@ pub fn run_predict_chunked(
     }
     let concat = materialize_concat(session, input)?;
     let tf_tables = materialize_tf_tables(session, settings, &concat)?;
+    run_predict_chunked_with(
+        session,
+        settings,
+        &concat,
+        &tf_tables,
+        threshold_match_weight,
+        num_chunks,
+    )
+}
 
-    // First pass seeds the accumulator table; later passes INSERT into it and
-    // drop their own per-pass output, so only one pass's intermediates plus the
-    // growing result are live at a time.
+/// Chunked predict over already-materialized concat/TF tables, accumulating
+/// the passes into one temp table: the first pass seeds the accumulator, later
+/// passes INSERT into it and drop their own output, so only one pass's
+/// intermediates plus the growing result are live at a time.
+pub fn run_predict_chunked_with(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    tf_tables: &[TableHandle],
+    threshold_match_weight: Option<f64>,
+    num_chunks: u32,
+) -> Result<TableHandle> {
     let mut acc: Option<TableHandle> = None;
-    for i in 0..num_chunks {
-        let blocked =
-            materialize_blocked_pairs_chunk(session, settings, &concat, Some((i, num_chunks)))?;
+    predict_chunks(
+        session,
+        settings,
+        concat,
+        tf_tables,
+        threshold_match_weight,
+        num_chunks,
+        |part| {
+            match &acc {
+                None => acc = Some(part.into_handle()),
+                Some(a) => {
+                    session.execute_batch(&format!(
+                        "INSERT INTO {} SELECT * FROM {}",
+                        a.physical, part.physical
+                    ))?;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    // At least one pass always runs, so acc is always Some here.
+    acc.ok_or_else(|| crate::error::DedupeError::Other("predict produced no chunks".to_string()))
+}
+
+/// Run the predict pipeline once per hash chunk, handing each pass's scored
+/// output to `sink` (which takes ownership; an unconsumed part drops its temp
+/// table). Chunk `i` of `n` scores the pairs whose right record satisfies
+/// `hash(uid_r) % n == i`; `num_chunks <= 1` is a single unfiltered pass.
+pub(crate) fn predict_chunks<'s>(
+    session: &'s Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    tf_tables: &[TableHandle],
+    threshold_match_weight: Option<f64>,
+    num_chunks: u32,
+    mut sink: impl FnMut(TempTable<'s>) -> Result<()>,
+) -> Result<()> {
+    let n = num_chunks.max(1);
+    for i in 0..n {
+        let blocked = TempTable::new(
+            session,
+            materialize_blocked_pairs_chunk(session, settings, concat, Some((i, n)))?,
+        );
         let pipeline = predict_pipeline(
             settings,
-            &concat,
-            &tf_tables,
+            concat,
+            tf_tables,
             &blocked,
             threshold_match_weight,
         )?;
-        let part = session.materialize(&pipeline)?;
-        session.drop_table(&blocked)?;
-        match &acc {
-            None => acc = Some(part),
-            Some(a) => {
-                session.execute_batch(&format!(
-                    "INSERT INTO {} SELECT * FROM {}",
-                    a.physical, part.physical
-                ))?;
-                session.drop_table(&part)?;
-            }
-        }
+        let part = session.materialize_temp(&pipeline)?;
+        drop(blocked);
+        sink(part)?;
     }
-    // num_chunks >= 2 runs at least one pass, so acc is always Some here.
-    acc.ok_or_else(|| crate::error::DedupeError::Other("predict produced no chunks".to_string()))
+    Ok(())
 }

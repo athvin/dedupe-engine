@@ -10,9 +10,6 @@ use crate::error::{DedupeError, Result};
 use crate::model::TrainedModel;
 use crate::session::{Session, TableHandle};
 use crate::settings::json::LinkType;
-use crate::sql::pipeline::CtePipeline;
-use crate::stages::block::blocked_id_pairs_sql;
-use crate::stages::uid_expr_for;
 
 /// Total possible comparisons (the cartesian count) by link type:
 /// - dedupe_only / link_and_dedupe: `N*(N-1)/2` over the concat
@@ -66,23 +63,15 @@ pub fn estimate_prior(
         })
         .collect();
 
-    let uid = uid_expr_for(&model.settings);
-    let mut p = CtePipeline::new().with_input(concat);
-    p.enqueue(
-        blocked_id_pairs_sql(
-            &rules,
-            &uid,
-            model.settings.link_type,
-            &model.settings.source_dataset_column,
-            concat.templated.as_str(),
-            &[],
-            None,
-        ),
+    let blocked = crate::predict::materialize_blocked_pairs_scalar(
+        session,
+        &model.settings,
+        concat,
+        &rules,
         "__splink__deterministic_blocked",
-    );
-    let blocked = session.materialize(&p)?;
+    )?;
     let num_observed = session.count(&blocked.physical)? as f64;
-    session.drop_table(&blocked)?;
+    drop(blocked);
 
     if num_observed > num_total_comparisons * recall {
         return Err(DedupeError::Other(format!(

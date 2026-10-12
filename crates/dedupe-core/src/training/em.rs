@@ -13,7 +13,7 @@ use crate::comparison::Comparison;
 use crate::error::{DedupeError, Result};
 use crate::model::{EstimateSource, ProbEstimate, TrainedModel};
 use crate::scoring;
-use crate::session::{Session, TableHandle};
+use crate::session::{Session, TableHandle, TempTable};
 use crate::settings::Settings;
 use crate::sql::literals::pyrepr;
 use crate::sql::pipeline::CtePipeline;
@@ -195,7 +195,7 @@ fn materialize_training_vectors(
     use crate::stages::block::BLOCKED_ID_PAIRS;
     use crate::stages::tf::{self, DF_CONCAT_WITH_TF};
     use crate::stages::uid_expr_for;
-    use crate::stages::vectors::BLOCKED_WITH_COLS;
+    use crate::stages::vectors::{BLOCKED_WITH_COLS, blocked_with_cols_sql_comparisons};
 
     let uid = uid_expr_for(settings);
     let rule = crate::blocking::BlockingRule {
@@ -205,20 +205,13 @@ fn materialize_training_vectors(
     };
 
     // Blocked pairs from the single training rule, on __splink__df_concat.
-    let mut bp = CtePipeline::new().with_input(concat);
-    bp.enqueue(
-        crate::stages::block::blocked_id_pairs_sql(
-            std::slice::from_ref(&rule),
-            &uid,
-            settings.link_type,
-            &settings.source_dataset_column,
-            concat.templated.as_str(),
-            &[],
-            None,
-        ),
+    let blocked = crate::predict::materialize_blocked_pairs_scalar(
+        session,
+        settings,
+        concat,
+        std::slice::from_ref(&rule),
         BLOCKED_ID_PAIRS,
-    );
-    let blocked = session.materialize(&bp)?;
+    )?;
 
     // Active comparisons' TF columns (for the concat_with_tf join + l/r cols).
     let mut tf_cols: Vec<String> = Vec::new();
@@ -230,7 +223,9 @@ fn materialize_training_vectors(
         }
     }
 
-    let mut p = CtePipeline::new().with_input(concat).with_input(&blocked);
+    let mut p = CtePipeline::new()
+        .with_input(concat)
+        .with_input(blocked.handle());
     for t in tf_tables {
         p.add_input(t);
     }
@@ -238,38 +233,10 @@ fn materialize_training_vectors(
         tf::concat_with_tf_sql(&tf_cols, &settings.tf_prefix),
         DF_CONCAT_WITH_TF,
     );
-
-    // blocked_with_cols for active comparisons only.
-    let mut sel: Vec<String> = Vec::new();
-    let push_lr = |sel: &mut Vec<String>, col: &str| {
-        sel.push(format!("\"l\".\"{col}\" AS \"{col}_l\""));
-        sel.push(format!("\"r\".\"{col}\" AS \"{col}_r\""));
-    };
-    if settings.source_dataset_required() {
-        push_lr(&mut sel, &settings.source_dataset_column);
-    }
-    push_lr(&mut sel, &settings.unique_id_column);
-    for c in active {
-        for col in &c.input_columns {
-            push_lr(&mut sel, col);
-        }
-        for col in c.tf_input_columns() {
-            push_lr(&mut sel, &format!("{}{col}", settings.tf_prefix));
-        }
-    }
-    let mut dedup: Vec<String> = Vec::new();
-    for s in sel {
-        if !dedup.contains(&s) {
-            dedup.push(s);
-        }
-    }
-    let bwc = format!(
-        "select\n    {},\n    b.match_key\nfrom {BLOCKED_ID_PAIRS} as b\ninner join {DF_CONCAT_WITH_TF} as l\non {} = b.join_key_l\ninner join {DF_CONCAT_WITH_TF} as r\non {} = b.join_key_r",
-        dedup.join(",\n    "),
-        uid.render("l"),
-        uid.render("r"),
+    p.enqueue(
+        blocked_with_cols_sql_comparisons(settings, active, &uid),
+        BLOCKED_WITH_COLS,
     );
-    p.enqueue(bwc, BLOCKED_WITH_COLS);
 
     // comparison vectors: uid + gamma CASE per active comparison + match_key.
     let mut cv: Vec<String> = Vec::new();
@@ -287,9 +254,7 @@ fn materialize_training_vectors(
         "__splink__df_comparison_vectors",
     );
 
-    let result = session.materialize(&p)?;
-    session.drop_table(&blocked)?;
-    Ok(result)
+    session.materialize(&p)
 }
 
 /// Compress comparison vectors to agreement-pattern counts over active gammas.
@@ -392,13 +357,12 @@ fn run_counts(
     p.enqueue(mwp_sql, "__splink__df_match_weight_parts");
     p.enqueue(predict_sql, "__splink__df_predict");
     p.enqueue(counts_sql, "__splink__m_u_counts");
-    let counts = session.materialize(&p)?;
+    let counts = session.materialize_temp(&p)?;
 
     let rows = session.query_strings(&format!(
         "select output_column_name, comparison_vector_value, m_count, u_count from {}",
         counts.physical
     ))?;
-    session.drop_table(&counts)?;
 
     let mut per_comp: BTreeMap<String, BTreeMap<i32, (f64, f64)>> = BTreeMap::new();
     let mut lambda_num = f64::NAN;
@@ -450,14 +414,17 @@ pub fn run_em_session(
     let adjusted_lambda =
         blocking_adjusted_lambda(&model.settings, model.settings.prior, &rule_columns);
 
-    let vectors = materialize_training_vectors(
+    let vectors = TempTable::new(
         session,
-        &model.settings,
-        concat,
-        tf_tables,
-        &active,
-        blocking_rule,
-    )?;
+        materialize_training_vectors(
+            session,
+            &model.settings,
+            concat,
+            tf_tables,
+            &active,
+            blocking_rule,
+        )?,
+    );
     if session.count(&vectors.physical)? == 0 {
         return Err(DedupeError::Other(format!(
             "training rule `{blocking_rule}` produced no record pairs"
@@ -465,7 +432,10 @@ pub fn run_em_session(
     }
 
     let mut working = build_working(&model.settings, &deactivated);
-    let patterns = materialize_agreement_patterns(session, &working, &vectors)?;
+    let patterns = TempTable::new(
+        session,
+        materialize_agreement_patterns(session, &working, &vectors)?,
+    );
 
     let max_iterations = model.settings.max_iterations;
     let em_convergence = model.settings.em_convergence;
@@ -528,8 +498,8 @@ pub fn run_em_session(
         }
     }
 
-    session.drop_table(&patterns)?;
-    session.drop_table(&vectors)?;
+    drop(patterns);
+    drop(vectors);
 
     // Collect trained values, then apply (avoids borrowing model mutably while
     // iterating its comparisons).

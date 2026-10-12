@@ -73,33 +73,22 @@ pub fn estimate_m_from_label_column(
     tf_tables: &[TableHandle],
     label_column: &str,
 ) -> Result<()> {
-    let uid = uid_expr_for(&model.settings);
     let rule = BlockingRule {
         index: 0,
         sql: format!("l.\"{label_column}\" = r.\"{label_column}\""),
         arrays_to_explode: Vec::new(),
     };
-    let mut bp = CtePipeline::new().with_input(concat);
-    bp.enqueue(
-        crate::stages::block::blocked_id_pairs_sql(
-            std::slice::from_ref(&rule),
-            &uid,
-            model.settings.link_type,
-            &model.settings.source_dataset_column,
-            concat.templated.as_str(),
-            &[],
-            None,
-        ),
+    let blocked = predict::materialize_blocked_pairs_scalar(
+        session,
+        &model.settings,
+        concat,
+        std::slice::from_ref(&rule),
         BLOCKED_ID_PAIRS,
-    );
-    let blocked = session.materialize(&bp)?;
+    )?;
     let cv_pipeline =
         predict::comparison_vectors_pipeline(&model.settings, concat, tf_tables, &blocked);
-    let vectors = session.materialize(&cv_pipeline)?;
-    assign_m_from_vectors(session, model, &vectors)?;
-    session.drop_table(&blocked)?;
-    session.drop_table(&vectors)?;
-    Ok(())
+    let vectors = session.materialize_temp(&cv_pipeline)?;
+    assign_m_from_vectors(session, model, &vectors)
 }
 
 /// Estimate m from a labels table of known-match pairs (clerical score is
@@ -140,9 +129,9 @@ pub fn estimate_m_from_pairwise_labels(
         format!("select {} from {}", swap.join(", "), labels.templated),
         "__splink__labels_prepared",
     );
-    let prepared = session.materialize(&lp)?;
+    let prepared = session.materialize_temp(&lp)?;
 
-    let mut bp = CtePipeline::new().with_input(&prepared);
+    let mut bp = CtePipeline::new().with_input(prepared.handle());
     bp.enqueue(
         format!(
             "select '0' as match_key, {id_l} as join_key_l, {id_r} as join_key_r from {}",
@@ -150,12 +139,8 @@ pub fn estimate_m_from_pairwise_labels(
         ),
         BLOCKED_ID_PAIRS,
     );
-    let blocked = session.materialize(&bp)?;
+    let blocked = session.materialize_temp(&bp)?;
     let cv_pipeline = predict::comparison_vectors_pipeline(settings, concat, tf_tables, &blocked);
-    let vectors = session.materialize(&cv_pipeline)?;
-    assign_m_from_vectors(session, model, &vectors)?;
-    session.drop_table(&prepared)?;
-    session.drop_table(&blocked)?;
-    session.drop_table(&vectors)?;
-    Ok(())
+    let vectors = session.materialize_temp(&cv_pipeline)?;
+    assign_m_from_vectors(session, model, &vectors)
 }

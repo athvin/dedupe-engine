@@ -9,15 +9,14 @@ use std::collections::BTreeMap;
 
 use crate::blocking::BlockingRule;
 use crate::error::{DedupeError, Result};
+use crate::predict;
 use crate::session::{Session, TableHandle};
 use crate::settings::Settings;
 use crate::sql::columns;
-use crate::sql::pipeline::CtePipeline;
-use crate::stages::block::{self, BLOCKED_ID_PAIRS};
-use crate::stages::uid_expr_for;
+use crate::stages::block::BLOCKED_ID_PAIRS;
 use crate::training::prior::total_possible_comparisons;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct BlockingRuleCount {
     pub blocking_rule: String,
     /// 0-based rule index (the `match_key`).
@@ -40,7 +39,6 @@ pub fn count_comparisons_from_blocking_rules(
     rules: &[String],
 ) -> Result<Vec<BlockingRuleCount>> {
     let total = total_possible_comparisons(session, concat, settings)? as i64;
-    let uid = uid_expr_for(settings);
 
     let brs: Vec<BlockingRule> = rules
         .iter()
@@ -53,25 +51,17 @@ pub fn count_comparisons_from_blocking_rules(
         .collect();
 
     // Materialize deduped blocked pairs and count per match_key.
-    let mut p = CtePipeline::new().with_input(concat);
-    p.enqueue(
-        block::blocked_id_pairs_sql(
-            &brs,
-            &uid,
-            settings.link_type,
-            &settings.source_dataset_column,
-            concat.templated.as_str(),
-            &[],
-            None,
-        ),
+    let blocked = predict::materialize_blocked_pairs_scalar(
+        session,
+        settings,
+        concat,
+        &brs,
         BLOCKED_ID_PAIRS,
-    );
-    let blocked = session.materialize(&p)?;
+    )?;
     let rows = session.query_strings(&format!(
         "select match_key, count(*) from {} group by match_key",
         blocked.physical
     ))?;
-    session.drop_table(&blocked)?;
 
     let counts: BTreeMap<i64, i64> = rows
         .into_iter()
