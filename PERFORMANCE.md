@@ -157,6 +157,29 @@ or `O(distinct patterns)`), plus `edge_bridges`, which pulls the thresholded
 edge set to compute bridges with `petgraph` (DuckDB has no native bridge
 algorithm). Nothing streams the candidate pairs out of DuckDB.
 
+> **Future optimization (not worth it yet): `edge_bridges` data movement.**
+> `edge_bridges` is the one place a non-trivial result leaves DuckDB. Measured
+> on 5M edges (8 cores), the cost splits roughly: DuckDB→Rust string pull 1.17s
+> (55%), string-keyed graph build 0.67s (31%), bridge DFS 0.38s (18%). The
+> algorithm is *not* the bottleneck — 82% is data movement and string hashing,
+> which exist only because the work left DuckDB.
+>
+> - A custom Rust **table-function extension** that ran bridges over the scan
+>   in-process would remove the serialization boundary (~2–4× faster here), but
+>   it would *not* speed up the algorithm itself, and it's a heavy thing to own
+>   (per-release builds, signing, distribution) for a secondary QA metric.
+> - A much cheaper in-Rust change captures most of the same win with no new
+>   build system: map node keys to dense integer ids in SQL, add a typed
+>   `(i64, i32, i32)` fetch instead of `Vec<Vec<String>>`, and build a
+>   `UnGraphMap<u32>`. That drops the per-cell `String` allocations and replaces
+>   string hashing with integer hashing (likely well under 1s). Guarded by the
+>   `edge_bridges_match_golden` parity test.
+>
+> Either way this only touches `edge_bridges` (run on the confident-edge subset,
+> opt-in), never the predict/cluster hot path — which is already fully in DuckDB
+> with nothing to push down. Do the cheap version first, and only if this metric
+> ever shows up as a real cost.
+
 **Are the fuzzy-matching extensions faster?** Measured on 5M string pairs
 (DuckDB 1.5.5): the `rapidfuzz` community extension is the *same speed* as the
 built-ins for the functions we use — `jaro_winkler_similarity` 0.095s built-in
