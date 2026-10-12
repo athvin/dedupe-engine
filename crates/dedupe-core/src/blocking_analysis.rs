@@ -51,8 +51,13 @@ pub fn count_comparisons_from_blocking_rules(
         .collect();
 
     // Materialize deduped blocked pairs and count per match_key.
-    let blocked =
-        predict::materialize_blocked_pairs_scalar(session, settings, concat, &brs, BLOCKED_ID_PAIRS)?;
+    let blocked = predict::materialize_blocked_pairs_scalar(
+        session,
+        settings,
+        concat,
+        &brs,
+        BLOCKED_ID_PAIRS,
+    )?;
     let rows = session.query_strings(&format!(
         "select match_key, count(*) from {} group by match_key",
         blocked.physical

@@ -139,7 +139,10 @@ pub fn predict_within(
     tf_tables: &[TableHandle],
     threshold_match_weight: Option<f64>,
 ) -> Result<TableHandle> {
-    let blocked = TempTable::new(session, predict::materialize_blocked_pairs(session, settings, concat)?);
+    let blocked = TempTable::new(
+        session,
+        predict::materialize_blocked_pairs(session, settings, concat)?,
+    );
     let pipeline = predict::predict_pipeline(
         settings,
         concat,

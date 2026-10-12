@@ -219,4 +219,3 @@ impl<'a> Linker<'a> {
         clustered_with_input_data(self.session, &self.model.settings, &self.concat, &clusters)
     }
 }
-

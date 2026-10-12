@@ -257,7 +257,10 @@ pub fn deterministic_link(
     tf_tables: &[TableHandle],
 ) -> Result<TableHandle> {
     let uid = uid_expr_for(settings);
-    let blocked = TempTable::new(session, materialize_blocked_pairs(session, settings, concat)?);
+    let blocked = TempTable::new(
+        session,
+        materialize_blocked_pairs(session, settings, concat)?,
+    );
     let mut p = CtePipeline::new()
         .with_input(concat)
         .with_input(blocked.handle());

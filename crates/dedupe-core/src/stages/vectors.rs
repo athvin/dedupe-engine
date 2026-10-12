@@ -118,7 +118,13 @@ pub fn blocked_with_cols_sql_comparisons(
 ) -> String {
     let cols =
         dedup_preserving_order(select_columns_for_blocking(settings, comparisons)).join(",\n    ");
-    blocked_with_cols_join_sql(&cols, uid, BLOCKED_ID_PAIRS, DF_CONCAT_WITH_TF, DF_CONCAT_WITH_TF)
+    blocked_with_cols_join_sql(
+        &cols,
+        uid,
+        BLOCKED_ID_PAIRS,
+        DF_CONCAT_WITH_TF,
+        DF_CONCAT_WITH_TF,
+    )
 }
 
 /// The gamma CASE statement for one comparison. Level order is declaration
