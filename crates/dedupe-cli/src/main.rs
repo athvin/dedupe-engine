@@ -5,8 +5,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use args::{
     AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, CountComparisonsArgs,
-    DeterministicLinkArgs, InputSource, LinkNewArgs, LinkNewScope, PredictArgs, SnapshotsArgs,
-    TrainArgs,
+    DeterministicLinkArgs, InputSource, LinkNewArgs, LinkNewScope, PredictArgs, ProfileArgs,
+    SnapshotsArgs, TrainArgs,
 };
 use clap::Parser;
 use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
@@ -15,6 +15,7 @@ use dedupe_core::clustering::{ClusterOptions, clustered_with_input_data, increme
 use dedupe_core::incremental::{predict_between, predict_within};
 use dedupe_core::linker::{Linker, TrainConfig};
 use dedupe_core::predict;
+use dedupe_core::profile;
 use dedupe_core::session::TableHandle;
 use dedupe_core::{DuckLakeConfig, Session, SessionOptions, Settings};
 
@@ -36,7 +37,36 @@ fn run() -> Result<()> {
         Command::CountComparisons(a) => count_comparisons(a),
         Command::Snapshots(a) => snapshots(a),
         Command::DeterministicLink(a) => deterministic_link(a),
+        Command::Profile(a) => profile_columns(a),
     }
+}
+
+fn profile_columns(a: ProfileArgs) -> Result<()> {
+    if a.columns.is_empty() {
+        bail!("profile requires at least one --column");
+    }
+    let settings = Settings::from_json_file(Path::new(&a.settings)).context("loading settings")?;
+    let session = open_session(&a.source)?;
+    let inputs = resolve_inputs(&session, &a.source)?;
+    let refs: Vec<(&TableHandle, &str)> = inputs.iter().map(|(h, n)| (h, n.as_str())).collect();
+    let concat = predict::materialize_concat_multi(&session, &refs, &settings)?;
+    let comp = profile::completeness(&session, &settings, &concat, &a.columns, "input_data_1")?;
+    let rows = session.query_strings(&format!(
+        "select source_dataset, column_name, total_null_rows, total_rows_inc_nulls, completeness from {} order by column_name",
+        comp.physical
+    ))?;
+    for r in &rows {
+        eprintln!(
+            "{} / {}: {}/{} non-null (completeness {})",
+            r[0],
+            r[1],
+            r[3].parse::<i64>().unwrap_or(0) - r[2].parse::<i64>().unwrap_or(0),
+            r[3],
+            r[4],
+        );
+    }
+    println!("{}", rows.len());
+    Ok(())
 }
 
 fn deterministic_link(a: DeterministicLinkArgs) -> Result<()> {

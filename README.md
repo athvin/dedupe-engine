@@ -44,9 +44,25 @@ The full core linkage pipeline, matching Splink's canonical workflow:
 11. **DuckLake snapshots / time-travel** — every lake write commits a snapshot;
     list snapshots and read inputs as of any version (`--as-of-version`).
     This is DuckLake-native and has no Splink equivalent.
+12. **Serving & explainability** — `deterministic_link` (rule-only linkage),
+    `score_pairs` (cartesian scoring of record sets, no blocking),
+    `TrainedModel::detailed_records` (trained m/u/Bayes-factor/match-weight per
+    level as data), and `n_largest_blocks` (which blocking-key values dominate).
+13. **Clustering QA** — graph metrics (node degree/centrality, cluster
+    size/density/centralisation), `cluster_using_single_best_links` (constrained
+    one-to-one), and multi-threshold cluster summary stats.
+14. **Evaluation depth** — `prediction_errors_from_labels_{column,table}`
+    (FP/FN inspection), accuracy truth-space from a labels table, and
+    `unlinkables_data`.
+15. **Profiling & label training** — column completeness and value-frequency
+    distributions; `estimate_m_from_label_column` / `estimate_m_from_pairwise_labels`.
 
-Out of scope: charts/visualizations (this is a backend engine — metrics are
-emitted as data), exploratory column profiling, exploding/array blocking rules.
+Everything is emitted as **data** (tables/records) — no charts or dashboards
+(this is a backend engine; a separate frontend consumes the data). Splink's
+`*_chart` / `*_dashboard` / labelling-tool methods are intentionally not ported.
+Node-level `is_bridge` edge metrics (which need the `igraph` Python package) are
+omitted, matching Splink's no-igraph fallback. Exploding/array blocking rules
+remain out of scope.
 
 ## Layout
 

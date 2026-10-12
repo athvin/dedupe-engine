@@ -33,6 +33,8 @@ pub enum Command {
     /// Strict rule-based linkage: candidate pairs from blocking rules, no
     /// probabilistic scoring.
     DeterministicLink(DeterministicLinkArgs),
+    /// Profile input columns: completeness (non-null proportion) per column.
+    Profile(ProfileArgs),
 }
 
 /// How to locate the input records.
@@ -180,6 +182,18 @@ pub struct ClusterNewArgs {
 pub struct SnapshotsArgs {
     #[command(flatten)]
     pub source: InputSource,
+}
+
+#[derive(Args, Debug)]
+pub struct ProfileArgs {
+    /// Settings or model JSON (id columns / link type).
+    #[arg(long)]
+    pub settings: String,
+    #[command(flatten)]
+    pub source: InputSource,
+    /// Columns to profile (repeatable).
+    #[arg(long = "column")]
+    pub columns: Vec<String>,
 }
 
 #[derive(Args, Debug)]
