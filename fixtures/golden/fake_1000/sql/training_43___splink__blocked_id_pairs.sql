@@ -1,6 +1,6 @@
 -- templated: __splink__blocked_id_pairs
--- physical: __splink__blocked_id_pairs_3dcc71c6b
-CREATE TABLE __splink__blocked_id_pairs_3dcc71c6b AS
+-- physical: __splink__blocked_id_pairs_22861bf49
+CREATE TABLE __splink__blocked_id_pairs_22861bf49 AS
 WITH
 
 __splink__df_concat as (

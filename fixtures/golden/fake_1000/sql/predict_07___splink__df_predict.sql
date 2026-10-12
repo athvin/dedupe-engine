@@ -1,6 +1,6 @@
 -- templated: __splink__df_predict
--- physical: __splink__df_predict_249fb94e6
-CREATE TABLE __splink__df_predict_249fb94e6 AS
+-- physical: __splink__df_predict_7075438e3
+CREATE TABLE __splink__df_predict_7075438e3 AS
 
     select
     cast(-8.386106589561935 as float8) + mw_first_name + mw_tf_adj_first_name + mw_surname + mw_tf_adj_surname + mw_dob + mw_city + mw_tf_adj_city + mw_email + mw_tf_adj_email as match_weight,

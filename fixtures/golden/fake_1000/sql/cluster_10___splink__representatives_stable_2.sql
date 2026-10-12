@@ -1,6 +1,6 @@
 -- templated: __splink__representatives_stable_2
--- physical: __splink__representatives_stable_2_d6e76a59b
-CREATE TABLE __splink__representatives_stable_2_d6e76a59b AS
+-- physical: __splink__representatives_stable_2_5c15fba5a
+CREATE TABLE __splink__representatives_stable_2_5c15fba5a AS
 select *
-from __splink__representatives_2_8467866eb
+from __splink__representatives_2_c6bd75d76
 where stable = 1

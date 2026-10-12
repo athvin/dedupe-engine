@@ -420,6 +420,55 @@ def gen_batch2_goldens() -> None:
     )
 
 
+def gen_batch3_goldens() -> None:
+    """prediction_errors (column + table), accuracy from labels table, unlinkables."""
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    sdf = db_api.register(df, dataset_display_name="fake_1000")
+    settings = json.loads((OUT / "model_final.json").read_text())
+    linker = Linker(sdf, settings)
+
+    # prediction errors from the ground-truth label column.
+    pe_col = linker.evaluation.prediction_errors_from_labels_column("cluster")
+    export_table(
+        con, pe_col.physical_name, OUT / "prediction_errors_column.parquet",
+        "unique_id_l, unique_id_r",
+    )
+
+    # unlinkables data (self-link proportions).
+    from splink.internals.unlinkables import unlinkables_data
+    ul = pd.DataFrame(unlinkables_data(linker))
+    con.execute("CREATE TABLE _ul AS SELECT * FROM ul")
+    export_table(con, "_ul", OUT / "unlinkables.parquet", "match_probability")
+
+    # Build a labels table from the cluster ground truth: all same-cluster pairs
+    # (match) + a sparse deterministic sample of cross-cluster pairs (non-match).
+    con.execute(
+        """CREATE TABLE _labels AS
+        select a.unique_id as unique_id_l, b.unique_id as unique_id_r, cast(1.0 as double) as clerical_match_score
+        from fake_1000 a join fake_1000 b on a.cluster=b.cluster and a.unique_id<b.unique_id
+        union all
+        select a.unique_id, b.unique_id, cast(0.0 as double)
+        from fake_1000 a join fake_1000 b on a.cluster<>b.cluster and a.unique_id<b.unique_id
+          and ((a.unique_id*7 + b.unique_id) % 350 = 0)
+        """
+    )
+    con.execute(f"COPY _labels TO '{OUT / 'labels_table.parquet'}' (FORMAT PARQUET)")
+    labels = db_api.register(con.execute("SELECT * FROM _labels").df(), dataset_display_name="labels")
+    linker.table_management.register_labels_table(labels)
+
+    acc_t = linker.evaluation.accuracy_analysis_from_labels_table(
+        labels, output_type="table", match_weight_round_to_nearest=0.1
+    )
+    export_table(con, acc_t.physical_name, OUT / "accuracy_labels_table.parquet", "truth_threshold")
+
+    pe_tbl = linker.evaluation.prediction_errors_from_labels_table(labels)
+    export_table(
+        con, pe_tbl.physical_name, OUT / "prediction_errors_table.parquet",
+        "unique_id_l, unique_id_r",
+    )
+
+
 def gen_blocking_analysis_golden() -> None:
     """Per-rule comparison counts for the model's blocking rules (exact, no
     sampling), via Splink's count_comparisons_from_blocking_rules."""
@@ -648,6 +697,7 @@ def main() -> None:
     gen_blocking_analysis_golden()
     gen_batch1_goldens()
     gen_batch2_goldens()
+    gen_batch3_goldens()
 
     # ------------------------------------------------------------------
     # Manifest.
