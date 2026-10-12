@@ -40,6 +40,10 @@ struct_excessive_bools = "allow"
 # Determinism-critical float/hash constants (CPython float-repr thresholds, sampling
 # moduli) — reformatting risks a transcription error for zero functional gain.
 unreadable_literal = "allow"
+# Bit-exact float formulas matching the golden-generation runs — rewriting the
+# literal `0.5 * (a + b)` shape as `f64::midpoint` is not guaranteed
+# bit-identical.
+manual_midpoint = "allow"
 # CLI command handlers and builder entry points legitimately take their args by
 # value (they own the parsed config); borrowing would just add noise.
 needless_pass_by_value = "allow"

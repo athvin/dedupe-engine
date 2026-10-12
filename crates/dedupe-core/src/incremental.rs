@@ -15,7 +15,7 @@
 
 use crate::error::Result;
 use crate::predict;
-use crate::session::{Session, TableHandle};
+use crate::session::{Session, TableHandle, TempTable};
 use crate::settings::Settings;
 use crate::sql::pipeline::CtePipeline;
 use crate::stages::block::{self, BLOCKED_ID_PAIRS};
@@ -57,10 +57,10 @@ pub fn predict_between(
         ),
         BLOCKED_ID_PAIRS,
     );
-    let blocked = session.materialize(&bp)?;
+    let blocked = session.materialize_temp(&bp)?;
 
     let tf_columns = settings.tf_columns();
-    let mut p = CtePipeline::new().with_input(&blocked);
+    let mut p = CtePipeline::new().with_input(blocked.handle());
     for t in tf_tables {
         p.add_input(t);
     }
@@ -96,9 +96,7 @@ pub fn predict_between(
         score::predict_sql(settings, settings.prior, false, threshold_match_weight)?,
         DF_PREDICT,
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&blocked)?;
-    Ok(out)
+    session.materialize(&p)
 }
 
 /// Score the full cartesian product of two record collections with no
@@ -141,7 +139,7 @@ pub fn predict_within(
     tf_tables: &[TableHandle],
     threshold_match_weight: Option<f64>,
 ) -> Result<TableHandle> {
-    let blocked = predict::materialize_blocked_pairs(session, settings, concat)?;
+    let blocked = TempTable::new(session, predict::materialize_blocked_pairs(session, settings, concat)?);
     let pipeline = predict::predict_pipeline(
         settings,
         concat,
@@ -149,7 +147,5 @@ pub fn predict_within(
         &blocked,
         threshold_match_weight,
     )?;
-    let out = session.materialize(&pipeline)?;
-    session.drop_table(&blocked)?;
-    Ok(out)
+    session.materialize(&pipeline)
 }

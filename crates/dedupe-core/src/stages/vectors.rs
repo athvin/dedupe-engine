@@ -42,22 +42,48 @@ fn comparison_blocking_columns(c: &Comparison, tf_prefix: &str) -> Vec<String> {
     out
 }
 
-/// The full select list for `blocked_with_cols`, deduped preserving order.
-fn columns_to_select_for_blocking(settings: &Settings) -> Vec<String> {
+/// uid/source-dataset columns plus each comparison's blocking columns (not
+/// yet deduped; no additional-retain columns).
+fn select_columns_for_blocking(settings: &Settings, comparisons: &[&Comparison]) -> Vec<String> {
     let mut out = uid_select_columns(settings);
-    for c in &settings.comparisons {
+    for c in comparisons {
         out.extend(comparison_blocking_columns(c, &settings.tf_prefix));
     }
-    for col in &settings.additional_columns_to_retain {
-        out.extend(l_r_select(col));
-    }
+    out
+}
+
+fn dedup_preserving_order(items: Vec<String>) -> Vec<String> {
     let mut deduped = Vec::new();
-    for item in out {
+    for item in items {
         if !deduped.contains(&item) {
             deduped.push(item);
         }
     }
     deduped
+}
+
+/// The full select list for `blocked_with_cols`, deduped preserving order.
+fn columns_to_select_for_blocking(settings: &Settings) -> Vec<String> {
+    let all: Vec<&Comparison> = settings.comparisons.iter().collect();
+    let mut out = select_columns_for_blocking(settings, &all);
+    for col in &settings.additional_columns_to_retain {
+        out.extend(l_r_select(col));
+    }
+    dedup_preserving_order(out)
+}
+
+fn blocked_with_cols_join_sql(
+    cols: &str,
+    uid: &UidExpr,
+    blocked: &str,
+    left_table: &str,
+    right_table: &str,
+) -> String {
+    format!(
+        "select\n    {cols},\n    b.match_key\nfrom {blocked} as b\ninner join {left_table} as l\non {uid_l} = b.join_key_l\ninner join {right_table} as r\non {uid_r} = b.join_key_r",
+        uid_l = uid.render("l"),
+        uid_r = uid.render("r"),
+    )
 }
 
 pub fn blocked_with_cols_sql(settings: &Settings, uid: &UidExpr) -> String {
@@ -80,11 +106,19 @@ pub fn blocked_with_cols_sql_tables(
     right_table: &str,
 ) -> String {
     let cols = columns_to_select_for_blocking(settings).join(",\n    ");
-    format!(
-        "select\n    {cols},\n    b.match_key\nfrom {blocked} as b\ninner join {left_table} as l\non {uid_l} = b.join_key_l\ninner join {right_table} as r\non {uid_r} = b.join_key_r",
-        uid_l = uid.render("l"),
-        uid_r = uid.render("r"),
-    )
+    blocked_with_cols_join_sql(&cols, uid, blocked, left_table, right_table)
+}
+
+/// As `blocked_with_cols_sql`, but restricted to a subset of comparisons and
+/// without the additional-retain columns — the shape EM training scores.
+pub fn blocked_with_cols_sql_comparisons(
+    settings: &Settings,
+    comparisons: &[&Comparison],
+    uid: &UidExpr,
+) -> String {
+    let cols =
+        dedup_preserving_order(select_columns_for_blocking(settings, comparisons)).join(",\n    ");
+    blocked_with_cols_join_sql(&cols, uid, BLOCKED_ID_PAIRS, DF_CONCAT_WITH_TF, DF_CONCAT_WITH_TF)
 }
 
 /// The gamma CASE statement for one comparison. Level order is declaration

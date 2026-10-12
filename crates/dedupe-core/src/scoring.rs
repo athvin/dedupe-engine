@@ -18,6 +18,16 @@ pub fn prob_to_match_weight(p: f64) -> f64 {
     prior_log2_odds(p)
 }
 
+/// Probability threshold -> match-weight threshold for the predict filter;
+/// `p <= 0` means "no filter".
+pub fn prob_threshold_to_match_weight(p: f64) -> Option<f64> {
+    if p <= 0.0 {
+        None
+    } else {
+        Some(prob_to_match_weight(p))
+    }
+}
+
 pub fn match_weight_to_prob(w: f64) -> f64 {
     if w >= 0.0 {
         1.0 / (1.0 + 2f64.powf(-w))

@@ -1,12 +1,13 @@
 //! High-level orchestration façade over a `Session`:
 //! train (prior -> u -> EM sessions), predict, cluster.
 
+use crate::accuracy::AccuracyOptions;
 use crate::clustering::{ClusterOptions, cluster_at_threshold, clustered_with_input_data};
 use crate::error::Result;
 use crate::model::TrainedModel;
 use crate::predict;
-use crate::scoring::match_weight_to_prob;
-use crate::session::{Session, TableHandle};
+use crate::scoring::prob_threshold_to_match_weight;
+use crate::session::{Session, TableHandle, TempTable};
 use crate::settings::Settings;
 use crate::training::em::{EmOptions, EmSessionResult, run_em_session};
 use crate::training::estimate_u::{UOptions, estimate_u};
@@ -66,22 +67,6 @@ impl<'a> Linker<'a> {
         self.model
     }
 
-    pub fn session_ref(&self) -> &'a Session {
-        self.session
-    }
-
-    pub fn settings_ref(&self) -> &Settings {
-        &self.model.settings
-    }
-
-    pub fn concat_ref(&self) -> &TableHandle {
-        &self.concat
-    }
-
-    pub fn tf_tables_ref(&self) -> &[TableHandle] {
-        &self.tf_tables
-    }
-
     /// Run the full training sequence: prior, then u, then EM sessions.
     pub fn train(&mut self, cfg: &TrainConfig) -> Result<TrainOutcome> {
         let prior = estimate_prior(
@@ -117,9 +102,11 @@ impl<'a> Linker<'a> {
 
     /// Predict, optionally filtering to a match-probability threshold.
     pub fn predict(&self, threshold_match_probability: Option<f64>) -> Result<TableHandle> {
-        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_mw);
-        let blocked =
-            predict::materialize_blocked_pairs(self.session, &self.model.settings, &self.concat)?;
+        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_match_weight);
+        let blocked = TempTable::new(
+            self.session,
+            predict::materialize_blocked_pairs(self.session, &self.model.settings, &self.concat)?,
+        );
         let pipeline = predict::predict_pipeline(
             &self.model.settings,
             &self.concat,
@@ -143,38 +130,15 @@ impl<'a> Linker<'a> {
         if num_chunks <= 1 {
             return self.predict(threshold_match_probability);
         }
-        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_mw);
-        let mut acc: Option<TableHandle> = None;
-        for i in 0..num_chunks {
-            let blocked = predict::materialize_blocked_pairs_chunk(
-                self.session,
-                &self.model.settings,
-                &self.concat,
-                Some((i, num_chunks)),
-            )?;
-            let pipeline = predict::predict_pipeline(
-                &self.model.settings,
-                &self.concat,
-                &self.tf_tables,
-                &blocked,
-                threshold_mw,
-            )?;
-            let part = self.session.materialize(&pipeline)?;
-            self.session.drop_table(&blocked)?;
-            match &acc {
-                None => acc = Some(part),
-                Some(a) => {
-                    self.session.execute_batch(&format!(
-                        "INSERT INTO {} SELECT * FROM {}",
-                        a.physical, part.physical
-                    ))?;
-                    self.session.drop_table(&part)?;
-                }
-            }
-        }
-        acc.ok_or_else(|| {
-            crate::error::DedupeError::Other("predict produced no chunks".to_string())
-        })
+        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_match_weight);
+        predict::run_predict_chunked_with(
+            self.session,
+            &self.model.settings,
+            &self.concat,
+            &self.tf_tables,
+            threshold_mw,
+            num_chunks,
+        )
     }
 
     /// Chunked predict that **streams each pass straight to a lake table**
@@ -196,41 +160,45 @@ impl<'a> Linker<'a> {
         num_chunks: u32,
         lake_opts: &crate::session::ducklake::LakeWriteOptions,
     ) -> Result<i64> {
-        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_mw);
-        let n = num_chunks.max(1);
+        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_match_weight);
         let mut created = false;
-        for i in 0..n {
-            let chunk = if n > 1 { Some((i, n)) } else { None };
-            let blocked = predict::materialize_blocked_pairs_chunk(
-                self.session,
-                &self.model.settings,
-                &self.concat,
-                chunk,
-            )?;
-            let pipeline = predict::predict_pipeline(
-                &self.model.settings,
-                &self.concat,
-                &self.tf_tables,
-                &blocked,
-                threshold_mw,
-            )?;
-            let part = self.session.materialize(&pipeline)?;
-            self.session.drop_table(&blocked)?;
-            if created {
-                self.session
-                    .lake_append(&part, target, &lake_opts.order_by)?;
-            } else {
-                // First pass seeds the table (handles partitioning + the first
-                // batch of rows via the standard create-or-replace write).
-                self.session.write_to_lake_with(&part, target, lake_opts)?;
-                created = true;
-            }
-            self.session.drop_table(&part)?;
-        }
+        predict::predict_chunks(
+            self.session,
+            &self.model.settings,
+            &self.concat,
+            &self.tf_tables,
+            threshold_mw,
+            num_chunks,
+            |part| {
+                if created {
+                    self.session
+                        .lake_append(&part, target, &lake_opts.order_by)?;
+                } else {
+                    // First pass seeds the table (handles partitioning + the
+                    // first batch of rows via the standard create-or-replace
+                    // write).
+                    self.session.write_to_lake_with(&part, target, lake_opts)?;
+                    created = true;
+                }
+                Ok(())
+            },
+        )?;
         let back = self
             .session
             .register_lake_table(target, "__splink__stream_count")?;
         self.session.count(&back.physical)
+    }
+
+    /// Truth-space accuracy table from a ground-truth label column (see
+    /// [`crate::accuracy::truth_space_from_labels_column`]).
+    pub fn truth_space_from_labels_column(&self, opts: &AccuracyOptions) -> Result<TableHandle> {
+        crate::accuracy::truth_space_from_labels_column(
+            self.session,
+            &self.model.settings,
+            &self.concat,
+            &self.tf_tables,
+            opts,
+        )
     }
 
     /// Cluster predictions at a probability threshold and join back to inputs.
@@ -252,14 +220,3 @@ impl<'a> Linker<'a> {
     }
 }
 
-/// Convert a probability threshold to a match-weight threshold for the
-/// predict filter; a threshold of 0 means "no filter".
-fn prob_threshold_to_mw(p: f64) -> Option<f64> {
-    if p <= 0.0 {
-        None
-    } else {
-        // Inverse of match_weight_to_prob: mw = log2(p / (1 - p)).
-        let _ = match_weight_to_prob; // documents the inverse relationship
-        Some((p / (1.0 - p)).log2())
-    }
-}

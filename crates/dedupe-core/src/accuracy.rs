@@ -16,7 +16,7 @@
 use crate::blocking::BlockingRule;
 use crate::error::Result;
 use crate::predict;
-use crate::session::{Session, TableHandle};
+use crate::session::{Session, TableHandle, TempTable};
 use crate::settings::Settings;
 use crate::sql::literals::pyrepr;
 use crate::sql::pipeline::CtePipeline;
@@ -89,7 +89,6 @@ fn labelled_predictions(
     tf_tables: &[TableHandle],
     label_column: &str,
 ) -> Result<TableHandle> {
-    let uid = uid_expr_for(settings);
     let n_model_rules = settings.blocking_rules.len();
 
     // Augmented rules: model rules (indices 0..n) + label-equality rule (n).
@@ -100,20 +99,13 @@ fn labelled_predictions(
         arrays_to_explode: Vec::new(),
     });
 
-    let mut bp = CtePipeline::new().with_input(concat);
-    bp.enqueue(
-        crate::stages::block::blocked_id_pairs_sql(
-            &rules,
-            &uid,
-            settings.link_type,
-            &settings.source_dataset_column,
-            concat.templated.as_str(),
-            &[],
-            None,
-        ),
+    let blocked = predict::materialize_blocked_pairs_scalar(
+        session,
+        settings,
+        concat,
+        &rules,
         crate::stages::block::BLOCKED_ID_PAIRS,
-    );
-    let blocked = session.materialize(&bp)?;
+    )?;
 
     // Retain the label column through scoring so clerical truth can be derived.
     let mut acc_settings = settings.clone();
@@ -137,11 +129,11 @@ fn labelled_predictions(
         score::predict_sql(&acc_settings, acc_settings.prior, false, None)?,
         DF_PREDICT,
     );
-    let predictions = session.materialize(&p)?;
-    session.drop_table(&blocked)?;
+    let predictions = session.materialize_temp(&p)?;
+    drop(blocked);
 
     // labels_with_predictions: add clerical_match_score + found_by_blocking_rules.
-    let mut lp = CtePipeline::new().with_input(&predictions);
+    let mut lp = CtePipeline::new().with_input(predictions.handle());
     lp.enqueue(
         format!(
             "select *,\n  case when \"{label_column}_l\" = \"{label_column}_r\" then cast(1.0 as float8) else cast(0.0 as float8) end as clerical_match_score,\n  not (cast(match_key as int) = {n_model_rules}) as found_by_blocking_rules\nfrom {}",
@@ -149,9 +141,7 @@ fn labelled_predictions(
         ),
         "__splink__labels_with_predictions",
     );
-    let out = session.materialize(&lp)?;
-    session.drop_table(&predictions)?;
-    Ok(out)
+    session.materialize(&lp)
 }
 
 /// The 7-step truth-space SQL over a `__splink__labels_with_predictions`-shaped
@@ -304,9 +294,12 @@ pub fn truth_space_from_labels_column(
     opts: &AccuracyOptions,
 ) -> Result<TableHandle> {
     let total_labels = total_possible_comparisons(session, concat, settings)?;
-    let labelled = labelled_predictions(session, settings, concat, tf_tables, &opts.label_column)?;
+    let labelled = TempTable::new(
+        session,
+        labelled_predictions(session, settings, concat, tf_tables, &opts.label_column)?,
+    );
 
-    let mut p = CtePipeline::new().with_input(&labelled);
+    let mut p = CtePipeline::new().with_input(labelled.handle());
     p.enqueue(
         truth_space_sql(
             &labelled.templated,
@@ -317,9 +310,7 @@ pub fn truth_space_from_labels_column(
         ),
         "__splink__truth_space_table",
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&labelled)?;
-    Ok(out)
+    session.materialize(&p)
 }
 
 /// Score a labels table's pairs:
@@ -366,11 +357,11 @@ pub fn labels_table_predictions(
         ),
         "__splink__labels_prepared",
     );
-    let prepared = session.materialize(&lp)?;
+    let prepared = session.materialize_temp(&lp)?;
 
     // Turn the prepared labels into a blocked-pairs table and score via the
     // standard predict pipeline.
-    let mut bp = CtePipeline::new().with_input(&prepared);
+    let mut bp = CtePipeline::new().with_input(prepared.handle());
     bp.enqueue(
         format!(
             "select '0' as match_key, {id_l} as join_key_l, {id_r} as join_key_r from {}",
@@ -378,9 +369,9 @@ pub fn labels_table_predictions(
         ),
         BLOCKED_ID_PAIRS,
     );
-    let blocked = session.materialize(&bp)?;
+    let blocked = session.materialize_temp(&bp)?;
     let pred_pipeline = predict::predict_pipeline(settings, concat, tf_tables, &blocked, None)?;
-    let predictions = session.materialize(&pred_pipeline)?;
+    let predictions = session.materialize_temp(&pred_pipeline)?;
 
     // Join clerical score back and compute found_by_blocking_rules.
     let fbr = found_by_blocking_rules_expr(settings);
@@ -393,8 +384,8 @@ pub fn labels_table_predictions(
         format!("p.\"{uid_col}_l\" = lp.\"{uid_col}_l\" and p.\"{uid_col}_r\" = lp.\"{uid_col}_r\"")
     };
     let mut fp = CtePipeline::new()
-        .with_input(&predictions)
-        .with_input(&prepared);
+        .with_input(predictions.handle())
+        .with_input(prepared.handle());
     fp.enqueue(
         format!(
             "select p.*, lp.clerical_match_score, ({fbr}) as found_by_blocking_rules\nfrom {p} as p\ninner join {lp} as lp on {join_on}",
@@ -403,11 +394,7 @@ pub fn labels_table_predictions(
         ),
         "__splink__labels_with_predictions",
     );
-    let out = session.materialize(&fp)?;
-    session.drop_table(&prepared)?;
-    session.drop_table(&blocked)?;
-    session.drop_table(&predictions)?;
-    Ok(out)
+    session.materialize(&fp)
 }
 
 /// Truth-space table from a labels table (no ghost-negative adjustment; P/N
@@ -421,8 +408,11 @@ pub fn truth_space_from_labels_table(
     threshold_actual: f64,
     match_weight_round_to_nearest: Option<f64>,
 ) -> Result<TableHandle> {
-    let lwp = labels_table_predictions(session, settings, concat, tf_tables, labels)?;
-    let mut p = CtePipeline::new().with_input(&lwp);
+    let lwp = TempTable::new(
+        session,
+        labels_table_predictions(session, settings, concat, tf_tables, labels)?,
+    );
+    let mut p = CtePipeline::new().with_input(lwp.handle());
     p.enqueue(
         truth_space_sql(
             &lwp.templated,
@@ -433,9 +423,7 @@ pub fn truth_space_from_labels_table(
         ),
         "__splink__truth_space_table",
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&lwp)?;
-    Ok(out)
+    session.materialize(&p)
 }
 
 /// False positives / false negatives vs a labels table: adds a
@@ -451,7 +439,10 @@ pub fn prediction_errors_from_labels_table(
     include_false_positives: bool,
     include_false_negatives: bool,
 ) -> Result<TableHandle> {
-    let lwp = labels_table_predictions(session, settings, concat, tf_tables, labels)?;
+    let lwp = TempTable::new(
+        session,
+        labels_table_predictions(session, settings, concat, tf_tables, labels)?,
+    );
     let t = pyrepr(threshold);
     let fp = format!("(clerical_match_score < {t} and match_probability > {t})");
     let fnn = format!("(clerical_match_score > {t} and match_probability < {t})");
@@ -463,7 +454,7 @@ pub fn prediction_errors_from_labels_table(
         conds.push(fnn.clone());
     }
     let where_clause = conds.join(" or ");
-    let mut p = CtePipeline::new().with_input(&lwp);
+    let mut p = CtePipeline::new().with_input(lwp.handle());
     p.enqueue(
         format!(
             "select *, case when {fp} then 'FP' when {fnn} then 'FN' end as truth_status\nfrom {} where {where_clause}",
@@ -471,9 +462,7 @@ pub fn prediction_errors_from_labels_table(
         ),
         "__splink__labels_with_fp_fn_status",
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&lwp)?;
-    Ok(out)
+    session.materialize(&p)
 }
 
 /// Unlinkables data: score each record against itself, then the cumulative
@@ -497,11 +486,11 @@ pub fn unlinkables_data(
         ),
         BLOCKED_ID_PAIRS,
     );
-    let blocked = session.materialize(&bp)?;
+    let blocked = session.materialize_temp(&bp)?;
     let pred_pipeline = predict::predict_pipeline(settings, concat, tf_tables, &blocked, None)?;
-    let self_link = session.materialize(&pred_pipeline)?;
+    let self_link = session.materialize_temp(&pred_pipeline)?;
 
-    let mut p = CtePipeline::new().with_input(&self_link);
+    let mut p = CtePipeline::new().with_input(self_link.handle());
     p.enqueue(
         format!(
             "select round(match_weight, 2) as match_weight, round(match_probability, 5) as match_probability from {}",
@@ -517,10 +506,7 @@ pub fn unlinkables_data(
         "select *, sum(prop) over (order by match_probability) as cum_prop\nfrom __splink__df_unlinkables_proportions\nwhere match_probability < 1".to_string(),
         "__splink__df_unlinkables",
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&blocked)?;
-    session.drop_table(&self_link)?;
-    Ok(out)
+    session.materialize(&p)
 }
 
 /// False positives / false negatives vs a ground-truth label column.
@@ -538,7 +524,10 @@ pub fn prediction_errors_from_labels_column(
     include_false_positives: bool,
     include_false_negatives: bool,
 ) -> Result<TableHandle> {
-    let labelled = labelled_predictions(session, settings, concat, tf_tables, label_column)?;
+    let labelled = TempTable::new(
+        session,
+        labelled_predictions(session, settings, concat, tf_tables, label_column)?,
+    );
     let t = pyrepr(threshold);
     let fp = format!("(clerical_match_score < {t} and match_probability > {t})");
     let fnn = format!(
@@ -552,12 +541,10 @@ pub fn prediction_errors_from_labels_column(
         conds.push(fnn);
     }
     let where_clause = conds.join(" or ");
-    let mut p = CtePipeline::new().with_input(&labelled);
+    let mut p = CtePipeline::new().with_input(labelled.handle());
     p.enqueue(
         format!("select * from {} where {where_clause}", labelled.templated),
         "__splink__predictions_from_label_column_fp_fn_only",
     );
-    let out = session.materialize(&p)?;
-    session.drop_table(&labelled)?;
-    Ok(out)
+    session.materialize(&p)
 }

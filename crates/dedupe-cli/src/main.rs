@@ -9,7 +9,7 @@ use args::{
     ProfileArgs, SnapshotsArgs, TrainArgs,
 };
 use clap::Parser;
-use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
+use dedupe_core::accuracy::AccuracyOptions;
 use dedupe_core::blocking_analysis::count_comparisons_from_blocking_rules;
 use dedupe_core::clustering::{ClusterOptions, clustered_with_input_data, incremental_cluster};
 use dedupe_core::incremental::{predict_between, predict_within};
@@ -78,19 +78,14 @@ fn deterministic_link(a: DeterministicLinkArgs) -> Result<()> {
     let concat = predict::materialize_concat_multi(&session, &refs, &settings)?;
     let tf = predict::materialize_tf_tables(&session, &settings, &concat)?;
     let pairs = predict::deterministic_link(&session, &settings, &concat, &tf)?;
-    let n = session.count(&pairs.physical)?;
-
-    if let Some(path) = &a.output_parquet {
-        write_parquet(&session, &pairs, path)?;
-    }
-    if a.source.catalog.is_some() {
-        session.write_to_lake_with(&pairs, &a.output, &a.source.lake_write_options())?;
-        eprintln!("wrote {n} deterministic pairs to lake table `{}`", a.output);
-    } else if a.output_parquet.is_none() {
-        bail!("no output target: provide --catalog (lake) or --output-parquet");
-    }
-    println!("{n}");
-    Ok(())
+    write_output(
+        &session,
+        &a.source,
+        &pairs,
+        &a.output,
+        a.output_parquet.as_deref(),
+        "deterministic pairs",
+    )
 }
 
 fn snapshots(a: SnapshotsArgs) -> Result<()> {
@@ -233,19 +228,63 @@ fn open_session(source: &InputSource) -> Result<Session> {
     Ok(session)
 }
 
+/// Register a parquet file under a templated name.
+fn register_parquet(session: &Session, path: &str, templated: &str) -> Result<TableHandle> {
+    let p = path.replace('\'', "''");
+    Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?)
+}
+
+/// Register from a CSV path, a parquet path, or a lake table (first present).
+fn register_three_way(
+    session: &Session,
+    csv: Option<&str>,
+    parquet: Option<&str>,
+    lake_table: Option<&str>,
+    as_of_version: Option<i64>,
+    templated: &str,
+    err: &str,
+) -> Result<TableHandle> {
+    if let Some(c) = csv {
+        return Ok(session.register_csv(Path::new(c), templated, &[])?);
+    }
+    if let Some(p) = parquet {
+        return register_parquet(session, p, templated);
+    }
+    if let Some(t) = lake_table {
+        return register_lake(session, t, templated, as_of_version);
+    }
+    bail!("{err}");
+}
+
+/// Register a table given either a parquet path or a lake table name.
+fn register_parquet_or_lake(
+    session: &Session,
+    parquet: Option<&str>,
+    lake_table: Option<&str>,
+    templated: &str,
+    what: &str,
+    flag: &str,
+) -> Result<TableHandle> {
+    if let Some(p) = parquet {
+        return register_parquet(session, p, templated);
+    }
+    if let Some(t) = lake_table {
+        return Ok(session.register_lake_table(t, templated)?);
+    }
+    bail!("no {what} specified: use --{flag} (lake) or --{flag}-parquet");
+}
+
 /// Register the configured input as a templated table.
 fn register_input(session: &Session, source: &InputSource, templated: &str) -> Result<TableHandle> {
-    if let Some(csv) = &source.input_csv {
-        return Ok(session.register_csv(Path::new(csv), templated, &[])?);
-    }
-    if let Some(parquet) = &source.input_parquet {
-        let p = parquet.replace('\'', "''");
-        return Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?);
-    }
-    if let Some(table) = &source.input {
-        return register_lake(session, table, templated, source.as_of_version);
-    }
-    bail!("no input specified: use --input (lake), --input-csv, or --input-parquet");
+    register_three_way(
+        session,
+        source.input_csv.as_deref(),
+        source.input_parquet.as_deref(),
+        source.input.as_deref(),
+        source.as_of_version,
+        templated,
+        "no input specified: use --input (lake), --input-csv, or --input-parquet",
+    )
 }
 
 /// Register a lake table, optionally as of a snapshot version (time travel).
@@ -273,10 +312,7 @@ fn register_ref(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
     match ext.as_deref() {
-        Some("parquet") => {
-            let p = reference.replace('\'', "''");
-            Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?)
-        }
+        Some("parquet") => register_parquet(session, reference, templated),
         Some("csv") => Ok(session.register_csv(Path::new(reference), templated, &[])?),
         _ => register_lake(session, reference, templated, as_of_version),
     }
@@ -387,19 +423,14 @@ fn predict(a: PredictArgs) -> Result<()> {
     }
 
     let predictions = linker.predict_chunked(a.threshold_match_probability, a.num_chunks)?;
-    let n = session.count(&predictions.physical)?;
-
-    if let Some(path) = &a.output_parquet {
-        write_parquet(&session, &predictions, path)?;
-    }
-    if a.source.catalog.is_some() {
-        session.write_to_lake_with(&predictions, &a.output, &a.source.lake_write_options())?;
-        eprintln!("wrote {n} predictions to lake table `{}`", a.output);
-    } else if a.output_parquet.is_none() {
-        bail!("no output target: provide --catalog (lake) or --output-parquet");
-    }
-    println!("{n}");
-    Ok(())
+    write_output(
+        &session,
+        &a.source,
+        &predictions,
+        &a.output,
+        a.output_parquet.as_deref(),
+        "predictions",
+    )
 }
 
 fn cluster(a: ClusterArgs) -> Result<()> {
@@ -407,30 +438,25 @@ fn cluster(a: ClusterArgs) -> Result<()> {
     let session = open_session(&a.source)?;
     let inputs = resolve_inputs(&session, &a.source)?;
 
-    let predictions = if let Some(parquet) = &a.predictions_parquet {
-        let p = parquet.replace('\'', "''");
-        session.register_table(&format!("read_parquet('{p}')"), "__splink__df_predict")?
-    } else if let Some(table) = &a.predictions {
-        session.register_lake_table(table, "__splink__df_predict")?
-    } else {
-        bail!("no predictions specified: use --predictions (lake) or --predictions-parquet");
-    };
+    let predictions = register_parquet_or_lake(
+        &session,
+        a.predictions_parquet.as_deref(),
+        a.predictions.as_deref(),
+        "__splink__df_predict",
+        "predictions",
+        "predictions",
+    )?;
 
     let linker = build_linker(&session, settings, &inputs)?;
     let clusters = linker.cluster(&predictions, a.threshold)?;
-    let n = session.count(&clusters.physical)?;
-
-    if let Some(path) = &a.output_parquet {
-        write_parquet(&session, &clusters, path)?;
-    }
-    if a.source.catalog.is_some() {
-        session.write_to_lake_with(&clusters, &a.output, &a.source.lake_write_options())?;
-        eprintln!("wrote {n} clustered rows to lake table `{}`", a.output);
-    } else if a.output_parquet.is_none() {
-        bail!("no output target: provide --catalog (lake) or --output-parquet");
-    }
-    println!("{n}");
-    Ok(())
+    write_output(
+        &session,
+        &a.source,
+        &clusters,
+        &a.output,
+        a.output_parquet.as_deref(),
+        "clustered rows",
+    )
 }
 
 fn link_new(a: LinkNewArgs) -> Result<()> {
@@ -447,13 +473,9 @@ fn link_new(a: LinkNewArgs) -> Result<()> {
     // Term frequencies reflect the established (existing) data.
     let tf_tables = predict::materialize_tf_tables(&session, &settings, &existing_concat)?;
 
-    let threshold_mw = a.threshold_match_probability.and_then(|p| {
-        if p <= 0.0 {
-            None
-        } else {
-            Some((p / (1.0 - p)).log2())
-        }
-    });
+    let threshold_mw = a
+        .threshold_match_probability
+        .and_then(dedupe_core::scoring::prob_threshold_to_match_weight);
 
     let mut parts: Vec<TableHandle> = Vec::new();
     if matches!(a.scope, LinkNewScope::Between | LinkNewScope::Both) {
@@ -477,22 +499,14 @@ fn link_new(a: LinkNewArgs) -> Result<()> {
     }
 
     let result = union_tables(&session, &parts)?;
-    let n = session.count(&result.physical)?;
-
-    if let Some(path) = &a.output_parquet {
-        write_parquet(&session, &result, path)?;
-    }
-    if a.source.catalog.is_some() {
-        session.write_to_lake_with(&result, &a.output, &a.source.lake_write_options())?;
-        eprintln!(
-            "wrote {n} incremental predictions to lake table `{}`",
-            a.output
-        );
-    } else if a.output_parquet.is_none() {
-        bail!("no output target: provide --catalog (lake) or --output-parquet");
-    }
-    println!("{n}");
-    Ok(())
+    write_output(
+        &session,
+        &a.source,
+        &result,
+        &a.output,
+        a.output_parquet.as_deref(),
+        "incremental predictions",
+    )
 }
 
 fn cluster_new(a: ClusterNewArgs) -> Result<()> {
@@ -502,14 +516,14 @@ fn cluster_new(a: ClusterNewArgs) -> Result<()> {
     let all_concat = predict::materialize_concat(&session, &input)?;
 
     // Existing clusters, normalised to (node_id, cluster_id).
-    let existing_raw = if let Some(parquet) = &a.existing_clusters_parquet {
-        let p = parquet.replace('\'', "''");
-        session.register_table(&format!("read_parquet('{p}')"), "existing_clusters_raw")?
-    } else if let Some(table) = &a.existing_clusters {
-        session.register_lake_table(table, "existing_clusters_raw")?
-    } else {
-        bail!("no existing clusters: use --existing-clusters or --existing-clusters-parquet");
-    };
+    let existing_raw = register_parquet_or_lake(
+        &session,
+        a.existing_clusters_parquet.as_deref(),
+        a.existing_clusters.as_deref(),
+        "existing_clusters_raw",
+        "existing clusters",
+        "existing-clusters",
+    )?;
     let existing_clusters = session.register_table(
         &format!(
             "(select \"{uid}\" as node_id, cluster_id from {tbl})",
@@ -519,14 +533,14 @@ fn cluster_new(a: ClusterNewArgs) -> Result<()> {
         "existing_clusters",
     )?;
 
-    let new_predictions = if let Some(parquet) = &a.predictions_parquet {
-        let p = parquet.replace('\'', "''");
-        session.register_table(&format!("read_parquet('{p}')"), "__splink__df_predict")?
-    } else if let Some(table) = &a.predictions {
-        session.register_lake_table(table, "__splink__df_predict")?
-    } else {
-        bail!("no new predictions: use --predictions or --predictions-parquet");
-    };
+    let new_predictions = register_parquet_or_lake(
+        &session,
+        a.predictions_parquet.as_deref(),
+        a.predictions.as_deref(),
+        "__splink__df_predict",
+        "new predictions",
+        "predictions",
+    )?;
 
     let clusters = incremental_cluster(
         &session,
@@ -539,36 +553,27 @@ fn cluster_new(a: ClusterNewArgs) -> Result<()> {
         },
     )?;
     let joined = clustered_with_input_data(&session, &settings, &all_concat, &clusters)?;
-    let n = session.count(&joined.physical)?;
-
-    if let Some(path) = &a.output_parquet {
-        write_parquet(&session, &joined, path)?;
-    }
-    if a.source.catalog.is_some() {
-        session.write_to_lake_with(&joined, &a.output, &a.source.lake_write_options())?;
-        eprintln!("wrote {n} clustered rows to lake table `{}`", a.output);
-    } else if a.output_parquet.is_none() {
-        bail!("no output target: provide --catalog (lake) or --output-parquet");
-    }
-    println!("{n}");
-    Ok(())
+    write_output(
+        &session,
+        &a.source,
+        &joined,
+        &a.output,
+        a.output_parquet.as_deref(),
+        "clustered rows",
+    )
 }
 
 /// Register the new-batch input for `link-new`.
 fn register_new_input(session: &Session, a: &LinkNewArgs) -> Result<TableHandle> {
-    if let Some(csv) = &a.new_input_csv {
-        return Ok(session.register_csv(Path::new(csv), "new_input", &[])?);
-    }
-    if let Some(parquet) = &a.new_input_parquet {
-        let p = parquet.replace('\'', "''");
-        return Ok(session.register_table(&format!("read_parquet('{p}')"), "new_input")?);
-    }
-    if let Some(table) = &a.new_input {
-        return Ok(session.register_lake_table(table, "new_input")?);
-    }
-    bail!(
-        "no new batch specified: use --new-input (lake), --new-input-csv, or --new-input-parquet"
-    );
+    register_three_way(
+        session,
+        a.new_input_csv.as_deref(),
+        a.new_input_parquet.as_deref(),
+        a.new_input.as_deref(),
+        None,
+        "new_input",
+        "no new batch specified: use --new-input (lake), --new-input-csv, or --new-input-parquet",
+    )
 }
 
 /// UNION ALL a set of prediction tables into one temp table.
@@ -576,18 +581,14 @@ fn union_tables(session: &Session, parts: &[TableHandle]) -> Result<TableHandle>
     if parts.len() == 1 {
         return Ok(parts[0].clone());
     }
-    let physical = format!("__splink__df_incremental_{}", std::process::id());
     let union = parts
         .iter()
         .map(|t| format!("SELECT * FROM {}", t.physical))
         .collect::<Vec<_>>()
         .join("\nUNION ALL\n");
-    session.execute_batch(&format!("CREATE TEMP TABLE {physical} AS {union}"))?;
-    Ok(TableHandle {
-        templated: "__splink__df_incremental".to_string(),
-        physical,
-        columns: parts[0].columns.clone(),
-    })
+    let mut p = dedupe_core::sql::pipeline::CtePipeline::new();
+    p.enqueue(union, "__splink__df_incremental");
+    Ok(session.materialize(&p)?)
 }
 
 fn count_comparisons(a: CountComparisonsArgs) -> Result<()> {
@@ -614,27 +615,8 @@ fn count_comparisons(a: CountComparisonsArgs) -> Result<()> {
         );
     }
     // Machine-readable summary on stdout.
-    println!("{}", serde_json::to_string(&counts_to_json(&counts))?);
+    println!("{}", serde_json::to_string(&counts)?);
     Ok(())
-}
-
-fn counts_to_json(
-    counts: &[dedupe_core::blocking_analysis::BlockingRuleCount],
-) -> serde_json::Value {
-    serde_json::Value::Array(
-        counts
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "blocking_rule": c.blocking_rule,
-                    "match_key": c.match_key,
-                    "marginal_comparison_count": c.marginal_comparison_count,
-                    "cumulative_comparison_count": c.cumulative_comparison_count,
-                    "total_possible_comparison_count": c.total_possible_comparison_count,
-                })
-            })
-            .collect(),
-    )
 }
 
 fn accuracy(a: AccuracyArgs) -> Result<()> {
@@ -643,30 +625,19 @@ fn accuracy(a: AccuracyArgs) -> Result<()> {
     let inputs = resolve_inputs(&session, &a.source)?;
     let linker = build_linker(&session, settings, &inputs)?;
 
-    let truth_space = truth_space_from_labels_column(
-        linker.session_ref(),
-        linker.settings_ref(),
-        linker.concat_ref(),
-        linker.tf_tables_ref(),
-        &AccuracyOptions {
-            label_column: a.label_column,
-            match_weight_round_to_nearest: Some(a.match_weight_round_to_nearest),
-            ..Default::default()
-        },
-    )?;
-    let n = session.count(&truth_space.physical)?;
-
-    if let Some(path) = &a.output_parquet {
-        write_parquet(&session, &truth_space, path)?;
-    }
-    if a.source.catalog.is_some() {
-        session.write_to_lake_with(&truth_space, &a.output, &a.source.lake_write_options())?;
-        eprintln!("wrote {n} truth-space rows to lake table `{}`", a.output);
-    } else if a.output_parquet.is_none() {
-        bail!("no output target: provide --catalog (lake) or --output-parquet");
-    }
-    println!("{n}");
-    Ok(())
+    let truth_space = linker.truth_space_from_labels_column(&AccuracyOptions {
+        label_column: a.label_column,
+        match_weight_round_to_nearest: Some(a.match_weight_round_to_nearest),
+        ..Default::default()
+    })?;
+    write_output(
+        &session,
+        &a.source,
+        &truth_space,
+        &a.output,
+        a.output_parquet.as_deref(),
+        "truth-space rows",
+    )
 }
 
 fn write_parquet(session: &Session, table: &TableHandle, path: &str) -> Result<()> {
@@ -675,5 +646,29 @@ fn write_parquet(session: &Session, table: &TableHandle, path: &str) -> Result<(
         "COPY {} TO '{p}' (FORMAT PARQUET)",
         table.physical
     ))?;
+    Ok(())
+}
+
+/// The shared tail of every produce-a-table subcommand: write the result to
+/// the configured outputs (parquet and/or lake) and print the row count.
+fn write_output(
+    session: &Session,
+    source: &InputSource,
+    table: &TableHandle,
+    output: &str,
+    output_parquet: Option<&str>,
+    what: &str,
+) -> Result<()> {
+    let n = session.count(&table.physical)?;
+    if let Some(path) = output_parquet {
+        write_parquet(session, table, path)?;
+    }
+    if source.catalog.is_some() {
+        session.write_to_lake_with(table, output, &source.lake_write_options())?;
+        eprintln!("wrote {n} {what} to lake table `{output}`");
+    } else if output_parquet.is_none() {
+        bail!("no output target: provide --catalog (lake) or --output-parquet");
+    }
+    println!("{n}");
     Ok(())
 }
