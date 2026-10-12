@@ -8,8 +8,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: fmt + clippy + docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,9 +24,41 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: rustdoc (deny warnings)
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  bench-compile:
+    name: benchmarks (compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Keep benches building; running them is manual (they take minutes).
+      - run: cargo bench -p dedupe-core --no-run
+
+  security:
+    name: cargo-deny (advisories + licenses + bans)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources
+
   ducklake-e2e:
+    name: DuckLake e2e
     runs-on: ubuntu-latest
     env:
       DEDUPE_E2E_DUCKLAKE: "1"
@@ -37,6 +74,7 @@ jobs:
       - run: cargo test -p dedupe-cli
 
   scale-tests:
+    name: scale parity (50k)
     runs-on: ubuntu-latest
     env:
       DEDUPE_SCALE_TESTS: "1"

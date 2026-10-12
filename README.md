@@ -83,6 +83,20 @@ intermediates are native temp tables; DuckLake is used only to read inputs and
 write final outputs (it cannot host temp tables), with writes in dedicated
 single-catalog transactions.
 
+## Performance & scaling
+
+Because DuckDB does the compute, scaling across CPUs and bounding memory are
+configuration, not code: `SessionOptions` exposes `threads`, `memory_limit`,
+`temp_directory` (disk spilling for larger-than-RAM workloads), and
+`preserve_insertion_order`, with `parity()` / `performance()` presets (CLI:
+`--threads`, `--memory-limit`, `--temp-dir`). On an 8-core box the scoring-heavy
+predict path scales ~3.2×; output-bound blocking does not. DuckLake has no
+secondary indexes, but `write_to_lake_with` supports `partition_by` and
+`order_by` (CLI `--partition-by` / `--order-by`) for read pruning and
+clustering-key-style zone-map tightening. Benchmarks (`cargo bench`), the
+profiling harness (`examples/profile_predict.rs`), and the full write-up are in
+[PERFORMANCE.md](PERFORMANCE.md).
+
 ## Usage
 
 ```sh
