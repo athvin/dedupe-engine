@@ -292,6 +292,318 @@ pub fn incremental_cluster(
     Ok(output)
 }
 
+/// Node + cluster graph metrics for a clustering (Splink's
+/// `compute_graph_metrics`, node and cluster tables — edge `is_bridge`
+/// requires igraph and is omitted). Returns `(nodes, clusters)` handles.
+///
+/// `clustered` must carry `cluster_id` plus the id columns (e.g. the output of
+/// [`clustered_with_input_data`]). Threshold is applied to the predictions.
+pub fn graph_metrics(
+    session: &Session,
+    settings: &Settings,
+    predictions: &TableHandle,
+    clustered: &TableHandle,
+    threshold_match_probability: f64,
+) -> Result<(TableHandle, TableHandle)> {
+    let uid = uid_expr_for(settings);
+    let threshold = pyrepr(threshold_match_probability);
+    let node = uid.render("c");
+    let edge_l = uid.render_suffixed("l");
+    let edge_r = uid.render_suffixed("r");
+
+    // Node metrics: degree (neighbours at/above threshold) + centrality.
+    let mut np = CtePipeline::new()
+        .with_input(predictions)
+        .with_input(clustered);
+    np.enqueue(
+        format!(
+            "select * from {} where match_probability >= {threshold}",
+            predictions.templated
+        ),
+        "__splink__truncated_edges",
+    );
+    np.enqueue(
+        format!(
+            "select {edge_l} as node, {edge_r} as neighbour from __splink__truncated_edges\nunion all\nselect {edge_r} as node, {edge_l} as neighbour from __splink__truncated_edges"
+        ),
+        "__splink__all_nodes",
+    );
+    np.enqueue(
+        format!(
+            "select {node} as composite_unique_id, c.cluster_id as cluster_id,\n  count(*) filter (where n.neighbour is not null) as node_degree,\n  count(*) over (partition by c.cluster_id) as cluster_size\nfrom {clustered} as c\nleft join __splink__all_nodes n on {node} = n.node\ngroup by composite_unique_id, cluster_id",
+            clustered = clustered.templated
+        ),
+        "__splink__graph_metrics_node_degree",
+    );
+    np.enqueue(
+        "select composite_unique_id, cluster_id, node_degree,\n  case when cluster_size > 1 then (1.0 * node_degree) / (cluster_size - 1) else 0 end as node_centrality\nfrom __splink__graph_metrics_node_degree".to_string(),
+        "__splink__graph_metrics_nodes",
+    );
+    let nodes = session.materialize(&np)?;
+
+    // Cluster metrics: size, edge count, density, centralisation.
+    let mut cp = CtePipeline::new().with_input(&nodes);
+    cp.enqueue(
+        format!(
+            "select cluster_id, count(*) as n_nodes, sum(node_degree)/2.0 as n_edges,\n  case when count(*) > 2 then 1.0*(count(*) * max(node_degree) - sum(node_degree)) / ((count(*) - 1) * (count(*) - 2)) else null end as cluster_centralisation\nfrom {} group by cluster_id",
+            nodes.templated
+        ),
+        "__splink__counts_per_cluster",
+    );
+    cp.enqueue(
+        "select cluster_id, n_nodes, n_edges,\n  case when n_nodes > 1 then 1.0*(n_edges * 2)/(n_nodes * (n_nodes-1)) else null end as density,\n  cluster_centralisation\nfrom __splink__counts_per_cluster".to_string(),
+        "__splink__graph_metrics_clusters",
+    );
+    let clusters = session.materialize(&cp)?;
+    Ok((nodes, clusters))
+}
+
+/// Per-threshold cluster summary stats (Splink's
+/// `cluster_pairwise_predictions_at_multiple_thresholds` with
+/// `output_cluster_summary_stats=True`): one row per threshold with
+/// `num_clusters`, `max_cluster_size`, `avg_cluster_size`. Each threshold is
+/// clustered independently (connected components is deterministic, so this
+/// matches the incremental implementation's output).
+pub fn cluster_summary_at_thresholds(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    predictions: &TableHandle,
+    thresholds: &[f64],
+) -> Result<TableHandle> {
+    let mut blocks = Vec::new();
+    for &t in thresholds {
+        let clusters = cluster_at_threshold(
+            session,
+            settings,
+            concat,
+            predictions,
+            ClusterOptions {
+                threshold_match_probability: t,
+            },
+        )?;
+        let weight = if t <= 0.0 || t >= 1.0 {
+            "cast(null as float)".to_string()
+        } else {
+            format!("cast({} as float)", pyrepr((t / (1.0 - t)).log2()))
+        };
+        blocks.push(format!(
+            "select cast({tp} as float) as threshold_match_probability, {weight} as threshold_match_weight, num_clusters, max_cluster_size, avg_cluster_size from (\n  select count(*) as num_clusters, max(cluster_size) as max_cluster_size, avg(cluster_size) as avg_cluster_size from (\n    select cluster_id, count(*) as cluster_size from {c} group by cluster_id))",
+            tp = pyrepr(t),
+            c = clusters.physical,
+        ));
+        // Keep the per-threshold cluster table alive until the union runs.
+    }
+    let mut p = CtePipeline::new();
+    p.enqueue(
+        blocks.join("\n\nUNION ALL\n\n"),
+        "__splink__multi_threshold_summary",
+    );
+    session.materialize(&p)
+}
+
+/// Constrained one-to-one clustering (Splink's `cluster_using_single_best_links`):
+/// merge clusters only on mutual best links, never putting two records from the
+/// same "duplicate-free" source dataset in one cluster. `ties_method`
+/// `"lowest_id"` breaks rank ties by the opposite node id (the default);
+/// `"drop"` removes tied edges up front. Returns `(node_id, cluster_id)`.
+pub fn cluster_using_single_best_links(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    predictions: &TableHandle,
+    duplicate_free_datasets: &[String],
+    threshold_match_probability: f64,
+    ties_method: &str,
+) -> Result<TableHandle> {
+    let uid = uid_expr_for(settings);
+    let sd = &settings.source_dataset_column;
+    let threshold = pyrepr(threshold_match_probability);
+    let dup_free: Vec<&str> = duplicate_free_datasets.iter().map(|s| s.as_str()).collect();
+
+    // Symmetric neighbours above threshold, carrying source datasets.
+    let neighbours = materialize_sql(
+        session,
+        &[predictions],
+        format!(
+            "select {l} as node_id, {r} as neighbour, \"{sd}_l\" as source_dataset_l, \"{sd}_r\" as source_dataset_r, match_probability\nfrom {p} where match_probability >= {threshold}\nunion all\nselect {r} as node_id, {l} as neighbour, \"{sd}_r\" as source_dataset_l, \"{sd}_l\" as source_dataset_r, match_probability\nfrom {p} where match_probability >= {threshold}",
+            l = uid.render_suffixed("l"),
+            r = uid.render_suffixed("r"),
+            p = predictions.templated,
+        ),
+        "__splink__sbl_neighbours",
+    )?;
+
+    // "drop" ties: remove edges tied to >1 record in a dup-free dataset.
+    let neighbours = if ties_method == "drop" {
+        drop_ties(session, &neighbours, &dup_free)?
+    } else {
+        neighbours
+    };
+
+    let mut representatives = materialize_sql(
+        session,
+        &[concat],
+        format!(
+            "select {node} as node_id, {node} as representative, \"{sd}\" as source_dataset from {c}",
+            node = uid.render_bare(),
+            c = concat.templated,
+        ),
+        "__splink__sbl_representatives",
+    )?;
+
+    let contains_expr = dup_free
+        .iter()
+        .map(|d| format!("max(cast(source_dataset = '{d}' as int)) > 0 as contains_{d}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let duplicate_criteria = dup_free
+        .iter()
+        .map(|d| format!("(l.contains_{d} and r.contains_{d})"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+
+    let mut iteration = 0u32;
+    loop {
+        iteration += 1;
+        let flags = materialize_sql(
+            session,
+            &[&representatives],
+            format!(
+                "select representative, {contains_expr} from {} group by representative",
+                representatives.templated
+            ),
+            &format!("__splink__sbl_flags_{iteration}"),
+        )?;
+        let reps_with_flags = materialize_sql(
+            session,
+            &[&representatives, &flags],
+            format!(
+                "select r.node_id, r.source_dataset, cf.*\nfrom {r} as r\ninner join {f} as cf on r.representative = cf.representative",
+                r = representatives.templated,
+                f = flags.templated,
+            ),
+            &format!("__splink__sbl_reps_flags_{iteration}"),
+        )?;
+        let ranked = materialize_sql(
+            session,
+            &[&neighbours, &reps_with_flags],
+            format!(
+                "select n.node_id, n.neighbour,\n  rank() over (partition by l.representative order by match_probability desc, r.node_id) as rank_l,\n  rank() over (partition by r.representative order by match_probability desc, l.node_id) as rank_r\nfrom {nb} as n\ninner join {rf} as l on n.node_id = l.node_id\ninner join {rf} as r on n.neighbour = r.node_id\nwhere l.representative <> r.representative and not ({duplicate_criteria})",
+                nb = neighbours.templated,
+                rf = reps_with_flags.templated,
+            ),
+            &format!("__splink__sbl_ranked_{iteration}"),
+        )?;
+        let best = materialize_sql(
+            session,
+            &[&ranked],
+            format!(
+                "select node_id, neighbour from {} where rank_l = 1 and rank_r = 1",
+                ranked.templated
+            ),
+            &format!("__splink__sbl_best_{iteration}"),
+        )?;
+        let new_reps = materialize_sql(
+            session,
+            &[&best, &representatives],
+            format!(
+                "select source.node_id, min(source.representative) as representative\nfrom (\n  select b.node_id, repr.representative as representative\n  from {b} as b left join {prev} as repr on b.neighbour = repr.node_id\n  union all\n  select node_id, representative from {prev}\n) as source\ngroup by source.node_id",
+                b = best.templated,
+                prev = representatives.templated,
+            ),
+            &format!("__splink__sbl_newrep_{iteration}"),
+        )?;
+        let next = materialize_sql(
+            session,
+            &[&new_reps, &representatives],
+            format!(
+                "select nr.node_id, nr.representative, repr.source_dataset,\n  nr.representative <> repr.representative as needs_updating\nfrom {nr} as nr inner join {prev} as repr on nr.node_id = repr.node_id",
+                nr = new_reps.templated,
+                prev = representatives.templated,
+            ),
+            &format!("__splink__sbl_repr_{iteration}"),
+        )?;
+        let remaining = session.query_scalar_f64(&format!(
+            "select count(*)::double from {} where needs_updating",
+            next.physical
+        ))? as i64;
+
+        for t in [
+            &flags,
+            &reps_with_flags,
+            &ranked,
+            &best,
+            &new_reps,
+            &representatives,
+        ] {
+            session.drop_table(t)?;
+        }
+        representatives = next;
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    let out = materialize_sql(
+        session,
+        &[&representatives],
+        format!(
+            "select node_id, representative as cluster_id from {}",
+            representatives.templated
+        ),
+        "__splink__clustering_output_final",
+    )?;
+    session.drop_table(&neighbours)?;
+    session.drop_table(&representatives)?;
+    Ok(out)
+}
+
+fn drop_ties(
+    session: &Session,
+    neighbours: &TableHandle,
+    dup_free: &[&str],
+) -> Result<TableHandle> {
+    let in_list = dup_free
+        .iter()
+        .map(|d| format!("'{d}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ties_l = materialize_sql(
+        session,
+        &[neighbours],
+        format!(
+            "select node_id, source_dataset_l, source_dataset_r, match_probability,\n  case when count(distinct neighbour) > 1 and source_dataset_r in ({in_list}) then 1 else 0 end as tie_l\nfrom {n} group by node_id, source_dataset_l, source_dataset_r, match_probability",
+            n = neighbours.templated
+        ),
+        "__splink__sbl_ties_l",
+    )?;
+    let ties_r = materialize_sql(
+        session,
+        &[neighbours],
+        format!(
+            "select neighbour, source_dataset_l, source_dataset_r, match_probability,\n  case when count(distinct node_id) > 1 and source_dataset_l in ({in_list}) then 1 else 0 end as tie_r\nfrom {n} group by neighbour, source_dataset_l, source_dataset_r, match_probability",
+            n = neighbours.templated
+        ),
+        "__splink__sbl_ties_r",
+    )?;
+    let no_ties = materialize_sql(
+        session,
+        &[neighbours, &ties_l, &ties_r],
+        format!(
+            "select n.*\nfrom {n} as n\ninner join {l} as l on n.node_id=l.node_id and n.source_dataset_l=l.source_dataset_l and n.source_dataset_r=l.source_dataset_r and n.match_probability=l.match_probability\ninner join {r} as r on n.neighbour=r.neighbour and n.source_dataset_l=r.source_dataset_l and n.source_dataset_r=r.source_dataset_r and n.match_probability=r.match_probability\nwhere l.tie_l = 0 and r.tie_r = 0",
+            n = neighbours.templated,
+            l = ties_l.templated,
+            r = ties_r.templated,
+        ),
+        "__splink__sbl_no_ties",
+    )?;
+    session.drop_table(neighbours)?;
+    session.drop_table(&ties_l)?;
+    session.drop_table(&ties_r)?;
+    Ok(no_ties)
+}
+
 /// Join the cluster assignment back to the input records.
 pub fn clustered_with_input_data(
     session: &Session,

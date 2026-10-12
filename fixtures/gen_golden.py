@@ -367,6 +367,59 @@ def gen_batch1_goldens() -> None:
     export_table(con2, "_nlb", OUT / "n_largest_blocks.parquet", "block_count desc")
 
 
+def gen_batch2_goldens() -> None:
+    """graph metrics (nodes+clusters), single-best-links, multi-threshold clustering."""
+    from splink.internals.clustering import (
+        cluster_pairwise_predictions_at_multiple_thresholds,
+    )
+
+    # Graph metrics + multi-threshold on the dedupe model.
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    sdf = db_api.register(df, dataset_display_name="fake_1000")
+    settings = json.loads((OUT / "model_final.json").read_text())
+    linker = Linker(sdf, settings)
+    preds = linker.inference.predict()
+    clusters = linker.clustering.cluster_pairwise_predictions_at_threshold(
+        preds, threshold_match_probability=CLUSTER_THRESHOLD
+    )
+    gm = linker.clustering.compute_graph_metrics(preds, clusters)
+    export_table(con, gm.nodes.physical_name, OUT / "graph_metrics_nodes.parquet", "composite_unique_id")
+    export_table(con, gm.clusters.physical_name, OUT / "graph_metrics_clusters.parquet", "cluster_id")
+
+    # Multi-threshold clustering summary stats.
+    nodes_tbl = db_api.register(df[["unique_id"]].copy(), dataset_display_name="nodes_only")
+    mt = cluster_pairwise_predictions_at_multiple_thresholds(
+        nodes=sdf,
+        edges=preds,
+        db_api=db_api,
+        node_id_column_name="unique_id",
+        match_probability_thresholds=[0.5, 0.9, 0.95, 0.99],
+        output_cluster_summary_stats=True,
+    )
+    export_table(
+        con, mt.physical_name, OUT / "multi_threshold_summary.parquet", "threshold_match_probability"
+    )
+
+    # Single-best-links on the link_only datasets (each source is duplicate-free).
+    con2, db2 = new_db_api()
+    a = df[df.unique_id % 2 == 0].copy()
+    b = df[df.unique_id % 2 == 1].copy()
+    sa = db2.register(a, dataset_display_name="df_a")
+    sb = db2.register(b, dataset_display_name="df_b")
+    link_model = json.loads((OUT / "link_link_only_model.json").read_text())
+    linker2 = Linker([sa, sb], link_model)
+    preds2 = linker2.inference.predict()
+    sbl = linker2.clustering.cluster_using_single_best_links(
+        preds2,
+        duplicate_free_datasets=["df_a", "df_b"],
+        threshold_match_probability=CLUSTER_THRESHOLD,
+    )
+    export_table(
+        con2, sbl.physical_name, OUT / "single_best_links_clusters.parquet", "source_dataset, unique_id"
+    )
+
+
 def gen_blocking_analysis_golden() -> None:
     """Per-rule comparison counts for the model's blocking rules (exact, no
     sampling), via Splink's count_comparisons_from_blocking_rules."""
@@ -594,6 +647,7 @@ def main() -> None:
     gen_accuracy_golden()
     gen_blocking_analysis_golden()
     gen_batch1_goldens()
+    gen_batch2_goldens()
 
     # ------------------------------------------------------------------
     # Manifest.
