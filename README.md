@@ -57,12 +57,17 @@ The full core linkage pipeline, matching Splink's canonical workflow:
 15. **Profiling & label training** — column completeness and value-frequency
     distributions; `estimate_m_from_label_column` / `estimate_m_from_pairwise_labels`.
 
+16. **Exploding / array blocking rules** — `arrays_to_explode` blocking rules
+    (UNNEST an array column, block on shared elements) with the full Splink
+    mechanism: per-rule marginal exploded id-pairs tables, the preceding-rule
+    `false` exclusion, and the `min(match_key)` two-stage dedup.
+17. **Edge `is_bridge` metric** — `clustering::edge_bridges` flags edges whose
+    removal disconnects a cluster, implemented Rust-native via `petgraph` (no
+    `igraph` dependency) and golden-tested against Splink-with-igraph.
+
 Everything is emitted as **data** (tables/records) — no charts or dashboards
 (this is a backend engine; a separate frontend consumes the data). Splink's
 `*_chart` / `*_dashboard` / labelling-tool methods are intentionally not ported.
-Node-level `is_bridge` edge metrics (which need the `igraph` Python package) are
-omitted, matching Splink's no-igraph fallback. Exploding/array blocking rules
-remain out of scope.
 
 ## Layout
 

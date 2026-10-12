@@ -73,18 +73,103 @@ pub fn materialize_blocked_pairs(
     concat: &TableHandle,
 ) -> Result<TableHandle> {
     let uid = uid_expr_for(settings);
+    let rules = &settings.blocking_rules;
+
+    if !rules.iter().any(|r| r.is_exploding()) {
+        // Fast path: no array explosion, a single UNION-ALL of scalar arms.
+        let mut p = CtePipeline::new().with_input(concat);
+        p.enqueue(
+            block::blocked_id_pairs_sql(
+                rules,
+                &uid,
+                settings.link_type,
+                &settings.source_dataset_column,
+                DF_CONCAT,
+                &[],
+            ),
+            BLOCKED_ID_PAIRS,
+        );
+        return session.materialize(&p);
+    }
+
+    materialize_blocked_pairs_exploding(session, settings, concat, &uid)
+}
+
+/// Exploding-rule path: materialize each exploding rule's marginal id-pairs
+/// table (UNNEST the concat, self-join, apply the dedupe where-clause and the
+/// "AND NOT preceding" exclusion), then UNION ALL all arms into
+/// `__splink__blocked_id_pairs_non_unique` and collapse to unique pairs by
+/// `min(match_key)`. Mirrors Splink's `block_using_rules_sqls` +
+/// `materialise_exploded_id_tables`.
+fn materialize_blocked_pairs_exploding(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    uid: &crate::stages::UidExpr,
+) -> Result<TableHandle> {
+    let rules = &settings.blocking_rules;
+    let sd_col = if settings.source_dataset_required() {
+        Some(settings.source_dataset_column.as_str())
+    } else {
+        None
+    };
+
+    // One materialized marginal table per exploding rule.
+    let mut marginals: Vec<(usize, TableHandle)> = Vec::new();
+    for (i, rule) in rules.iter().enumerate() {
+        if !rule.is_exploding() {
+            continue;
+        }
+        let preceding: Vec<&_> = rules[..i].iter().collect();
+        let retain =
+            block::blocking_retain_columns(&preceding, rule, &settings.unique_id_column, sd_col)?;
+        let unnest_sql = block::explode_arrays_sql(DF_CONCAT, &rule.arrays_to_explode, &retain);
+        let marginal_sql = block::marginal_exploded_id_pairs_sql(
+            rule,
+            &preceding,
+            uid,
+            settings.link_type,
+            &settings.source_dataset_column,
+            block::DF_CONCAT_UNNESTED,
+        );
+        let mut mp = CtePipeline::new().with_input(concat);
+        mp.enqueue(unnest_sql, block::DF_CONCAT_UNNESTED);
+        mp.enqueue(
+            marginal_sql,
+            block::marginal_exploded_table_name(rule.index),
+        );
+        marginals.push((rule.index, session.materialize(&mp)?));
+    }
+
+    let marginal_refs: Vec<(usize, String)> = marginals
+        .iter()
+        .map(|(idx, h)| (*idx, h.physical.clone()))
+        .collect();
+
+    // UNION ALL (scalar arms + exploding arms reading their marginals) ->
+    // non-unique, then `min(match_key)` dedup.
     let mut p = CtePipeline::new().with_input(concat);
     p.enqueue(
         block::blocked_id_pairs_sql(
-            &settings.blocking_rules,
-            &uid,
+            rules,
+            uid,
             settings.link_type,
             &settings.source_dataset_column,
             DF_CONCAT,
+            &marginal_refs,
         ),
+        block::BLOCKED_ID_PAIRS_NON_UNIQUE,
+    );
+    p.enqueue(
+        block::dedup_non_unique_sql(block::BLOCKED_ID_PAIRS_NON_UNIQUE),
         BLOCKED_ID_PAIRS,
     );
-    session.materialize(&p)
+    let out = session.materialize(&p)?;
+
+    for (_, h) in &marginals {
+        session.drop_table(h)?;
+    }
+    Ok(out)
 }
 
 /// Pipeline from blocked id pairs through `__splink__df_comparison_vectors`.

@@ -77,6 +77,7 @@ pub fn estimate_m_from_label_column(
     let rule = BlockingRule {
         index: 0,
         sql: format!("l.\"{label_column}\" = r.\"{label_column}\""),
+        arrays_to_explode: Vec::new(),
     };
     let mut bp = CtePipeline::new().with_input(concat);
     bp.enqueue(
@@ -86,6 +87,7 @@ pub fn estimate_m_from_label_column(
             model.settings.link_type,
             &model.settings.source_dataset_column,
             concat.templated.as_str(),
+            &[],
         ),
         BLOCKED_ID_PAIRS,
     );

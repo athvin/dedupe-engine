@@ -29,9 +29,19 @@ fn exclude_preceding_sql(rule: &BlockingRule, preceding: &[&BlockingRule]) -> St
     if preceding.is_empty() {
         return String::new();
     }
+    // Splink: a *scalar* preceding rule excludes its own pairs via
+    // `coalesce((<sql>),false)`; an *exploding* preceding rule contributes the
+    // literal `false` (its pairs live in a separate marginal table and are
+    // deduplicated downstream by `min(match_key)`, not by this predicate).
     let clauses: Vec<String> = preceding
         .iter()
-        .map(|r| format!("coalesce(({}),false)", r.sql))
+        .map(|r| {
+            if r.is_exploding() {
+                "false".to_string()
+            } else {
+                format!("coalesce(({}),false)", r.sql)
+            }
+        })
         .collect();
     format!("\nAND NOT ({})", clauses.join(" OR "))
 }
@@ -52,6 +62,7 @@ pub fn blocked_id_pairs_cross_sql(
         fallback = [BlockingRule {
             index: 0,
             sql: "1=1".to_string(),
+            arrays_to_explode: Vec::new(),
         }];
         &fallback
     } else {
@@ -76,12 +87,19 @@ pub fn blocked_id_pairs_cross_sql(
     arms.join("\n\nUNION ALL\n\n")
 }
 
+/// `__splink__blocked_id_pairs` arms over `input_table`. `marginals` maps each
+/// *exploding* rule's index to the physical name of its pre-materialized
+/// marginal id-pairs table (see [`marginal_exploded_id_pairs_sql`]); scalar
+/// rules ignore it. When any exploding rule is present the caller must wrap
+/// the UNION-ALL in [`dedup_non_unique_sql`] to collapse duplicate pairs by
+/// `min(match_key)`.
 pub fn blocked_id_pairs_sql(
     rules: &[BlockingRule],
     uid: &UidExpr,
     link_type: LinkType,
     source_dataset_col: &str,
     input_table: &str,
+    marginals: &[(usize, String)],
 ) -> String {
     // No rules -> cartesian product via a literal 1=1 rule (Splink's fallback).
     let fallback;
@@ -89,6 +107,7 @@ pub fn blocked_id_pairs_sql(
         fallback = [BlockingRule {
             index: 0,
             sql: "1=1".to_string(),
+            arrays_to_explode: Vec::new(),
         }];
         &fallback
     } else {
@@ -99,6 +118,20 @@ pub fn blocked_id_pairs_sql(
         .iter()
         .enumerate()
         .map(|(i, rule)| {
+            if rule.is_exploding() {
+                // Exploding arm reads its pre-materialized marginal table
+                // directly; the `where`/`exclude` logic was already applied
+                // when that table was built.
+                let marginal = marginals
+                    .iter()
+                    .find(|(idx, _)| *idx == rule.index)
+                    .map(|(_, name)| name.as_str())
+                    .expect("exploding rule missing its marginal id-pairs table");
+                return format!(
+                    "select\n'{match_key}' as match_key,\njoin_key_l,\njoin_key_r\nfrom {marginal}",
+                    match_key = rule.index,
+                );
+            }
             let preceding: Vec<&BlockingRule> = rules[..i].iter().collect();
             format!(
                 "select\n'{match_key}' as match_key,\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {input_table} as l\ninner join {input_table} as r\non\n({rule_sql})\n{where}{exclude}",
@@ -112,4 +145,106 @@ pub fn blocked_id_pairs_sql(
         })
         .collect();
     arms.join("\n\nUNION ALL\n\n")
+}
+
+/// `__splink__blocked_id_pairs_non_unique` (templated name of the un-deduped
+/// UNION-ALL when exploding rules are present).
+pub const BLOCKED_ID_PAIRS_NON_UNIQUE: &str = "__splink__blocked_id_pairs_non_unique";
+
+/// Templated name for the UNNEST'd concat used to build an exploding rule's
+/// marginal id-pairs table.
+pub const DF_CONCAT_UNNESTED: &str = "__splink__df_concat_unnested";
+
+/// Physical/templated name of an exploding rule's marginal id-pairs table.
+pub fn marginal_exploded_table_name(match_key: usize) -> String {
+    format!("__splink__marginal_exploded_ids_blocking_rule_mk_{match_key}")
+}
+
+/// Collapse `__splink__blocked_id_pairs_non_unique` to unique pairs, keeping
+/// the smallest `match_key` per pair (lexical string min, matching Splink —
+/// `match_key` is a string literal, never cast to int).
+pub fn dedup_non_unique_sql(non_unique_table: &str) -> String {
+    format!(
+        "select\nmin(match_key) as match_key,\njoin_key_l,\njoin_key_r\nfrom {non_unique_table}\ngroup by join_key_l, join_key_r"
+    )
+}
+
+/// Recursive array explosion, mirroring DuckDB's `explode_arrays_sql`: each
+/// `unnest(col) as col` wraps the previous level as a subquery, so multiple
+/// array columns cross-product element-wise. NULL/empty arrays yield zero rows
+/// naturally (so records with no tokens drop out of blocking).
+pub fn explode_arrays_sql(
+    tbl: &str,
+    columns_to_explode: &[String],
+    other_columns_to_retain: &[String],
+) -> String {
+    if columns_to_explode.is_empty() {
+        let cols: Vec<String> = other_columns_to_retain
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect();
+        return format!("select {} from {tbl}", cols.join(","));
+    }
+    let mut remaining = columns_to_explode.to_vec();
+    let col = remaining.pop().expect("non-empty");
+    let mut selects = vec![format!("unnest(\"{col}\") as \"{col}\"")];
+    selects.extend(other_columns_to_retain.iter().map(|c| format!("\"{c}\"")));
+    selects.extend(remaining.iter().map(|c| format!("\"{c}\"")));
+    let mut retain = other_columns_to_retain.to_vec();
+    retain.push(col);
+    format!(
+        "select {} from ({})",
+        selects.join(","),
+        explode_arrays_sql(tbl, &remaining, &retain)
+    )
+}
+
+/// Columns the UNNEST'd concat must carry for an exploding rule: the unique id
+/// (and source dataset, if any), plus every base column referenced by the rule
+/// and all preceding rules, dedup-preserving-order, minus the array columns
+/// being exploded. Mirrors Splink's `_columns_needed_for_blocking`.
+pub fn blocking_retain_columns(
+    preceding: &[&BlockingRule],
+    rule: &BlockingRule,
+    uid_column: &str,
+    source_dataset_col: Option<&str>,
+) -> crate::error::Result<Vec<String>> {
+    let mut cols: Vec<String> = Vec::new();
+    if let Some(sd) = source_dataset_col {
+        cols.push(sd.to_string());
+    }
+    cols.push(uid_column.to_string());
+    for br in preceding.iter().copied().chain(std::iter::once(rule)) {
+        for c in br.referenced_columns()? {
+            if !cols.contains(&c) {
+                cols.push(c);
+            }
+        }
+    }
+    cols.retain(|c| !rule.arrays_to_explode.contains(c));
+    Ok(cols)
+}
+
+/// One exploding rule's marginal id-pairs table: distinct `(join_key_l,
+/// join_key_r)` from a self-join of the UNNEST'd concat on the rule's scalar
+/// condition, with the dedupe `uid_l < uid_r` where-clause and the
+/// "AND NOT preceding" exclusion already applied. Materialized before the main
+/// blocked-pairs pipeline; the exploding arm then reads it directly.
+pub fn marginal_exploded_id_pairs_sql(
+    rule: &BlockingRule,
+    preceding: &[&BlockingRule],
+    uid: &UidExpr,
+    link_type: LinkType,
+    source_dataset_col: &str,
+    unnested_table: &str,
+) -> String {
+    format!(
+        "select distinct\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {t} as l\ninner join {t} as r\non\n({rule_sql})\n{where}{exclude}",
+        uid_l = uid.render("l"),
+        uid_r = uid.render("r"),
+        t = unnested_table,
+        rule_sql = rule.sql,
+        where = where_condition(uid, link_type, source_dataset_col),
+        exclude = exclude_preceding_sql(rule, preceding),
+    )
 }

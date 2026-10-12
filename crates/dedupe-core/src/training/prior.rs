@@ -63,6 +63,7 @@ pub fn estimate_prior(
         .map(|(i, sql)| BlockingRule {
             index: i,
             sql: sql.clone(),
+            arrays_to_explode: Vec::new(),
         })
         .collect();
 
@@ -75,6 +76,7 @@ pub fn estimate_prior(
             model.settings.link_type,
             &model.settings.source_dataset_column,
             concat.templated.as_str(),
+            &[],
         ),
         "__splink__deterministic_blocked",
     );

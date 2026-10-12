@@ -615,6 +615,53 @@ def gen_incremental_goldens() -> None:
     )
 
 
+def gen_exploding_golden() -> None:
+    """Exploding/array blocking: a synthetic dataset with a LIST column
+    exercising single-element share, multi-element share (dedup), cross-rule
+    dedup (min match_key), and empty/NULL arrays (drop out)."""
+    out = HERE / "golden" / "exploding"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    con, db_api = new_db_api()
+    con.execute(
+        """create table people as select * from (values
+        (0,'Alice','London',['x','y']),
+        (1,'Bob','London',['x']),
+        (2,'Carol','Leeds',['x','y','z']),
+        (3,'Alice','Hull',['q']),
+        (4,'Alice','Hull',['q','r']),
+        (5,'Dan','York',[]::VARCHAR[]),
+        (6,'Eve','York',NULL::VARCHAR[])
+        ) t(unique_id, first_name, city, tokens)"""
+    )
+    con.execute(f"COPY people TO '{out / 'people.parquet'}' (FORMAT PARQUET)")
+    sdf = db_api.register("people", dataset_display_name="people")
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        comparisons=[cl.ExactMatch("first_name"), cl.ExactMatch("city")],
+        blocking_rules_to_generate_predictions=[
+            block_on("first_name"),
+            block_on("tokens", arrays_to_explode=["tokens"]),
+        ],
+    )
+    linker = Linker(sdf, settings)
+    linker.misc.save_model_to_json(out / "model.json", overwrite=True)
+    preds = linker.inference.predict(warning_mode="never")
+    con.execute(
+        f"COPY (SELECT unique_id_l, unique_id_r, match_key, gamma_first_name, gamma_city, "
+        f"match_weight, match_probability FROM {preds.physical_name} "
+        f"ORDER BY unique_id_l, unique_id_r, match_key) TO '{out / 'predictions.parquet'}' (FORMAT PARQUET)"
+    )
+    files = {
+        str(p.relative_to(out)): sha256(p) for p in sorted(out.rglob("*")) if p.is_file()
+    }
+    (out / "MANIFEST.json").write_text(
+        json.dumps({"dataset": "exploding", "files": files}, indent=2)
+    )
+    print(f"OK exploding: {len(files)} files")
+
+
 def gen_historical_50k() -> None:
     """A second, larger golden dataset (50k rows, richer schema, higher null
     rates) exercising the full pipeline at scale on a different distribution.
@@ -867,3 +914,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
     gen_historical_50k()
+    gen_exploding_golden()

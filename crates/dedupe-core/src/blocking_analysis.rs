@@ -49,6 +49,7 @@ pub fn count_comparisons_from_blocking_rules(
         .map(|(i, sql)| BlockingRule {
             index: i,
             sql: sql.clone(),
+            arrays_to_explode: Vec::new(),
         })
         .collect();
 
@@ -61,6 +62,7 @@ pub fn count_comparisons_from_blocking_rules(
             settings.link_type,
             &settings.source_dataset_column,
             concat.templated.as_str(),
+            &[],
         ),
         BLOCKED_ID_PAIRS,
     );

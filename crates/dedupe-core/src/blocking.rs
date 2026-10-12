@@ -9,6 +9,15 @@ pub struct BlockingRule {
     pub index: usize,
     /// Raw SQL join condition, passed through verbatim.
     pub sql: String,
+    /// Array columns to UNNEST before blocking (membership blocking). Empty =
+    /// an ordinary scalar equi/filter rule.
+    pub arrays_to_explode: Vec<String>,
+}
+
+impl BlockingRule {
+    pub fn is_exploding(&self) -> bool {
+        !self.arrays_to_explode.is_empty()
+    }
 }
 
 impl BlockingRule {

@@ -119,6 +119,7 @@ pub fn score_pairs(
     s.blocking_rules = vec![crate::blocking::BlockingRule {
         index: 0,
         sql: "1=1".to_string(),
+        arrays_to_explode: Vec::new(),
     }];
     predict_between(
         session,

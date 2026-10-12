@@ -17,7 +17,7 @@ fn sha256_hex(path: &Path) -> String {
 
 #[test]
 fn goldens_match_manifest() {
-    for dataset in ["fake_1000", "historical_50k"] {
+    for dataset in ["fake_1000", "historical_50k", "exploding"] {
         check_manifest(&golden_root().join(dataset));
     }
 }

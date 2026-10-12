@@ -97,6 +97,7 @@ fn labelled_predictions(
     rules.push(BlockingRule {
         index: n_model_rules,
         sql: format!("l.\"{label_column}\" = r.\"{label_column}\""),
+        arrays_to_explode: Vec::new(),
     });
 
     let mut bp = CtePipeline::new().with_input(concat);
@@ -107,6 +108,7 @@ fn labelled_predictions(
             settings.link_type,
             &settings.source_dataset_column,
             concat.templated.as_str(),
+            &[],
         ),
         crate::stages::block::BLOCKED_ID_PAIRS,
     );

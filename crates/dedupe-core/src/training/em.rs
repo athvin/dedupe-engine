@@ -202,6 +202,7 @@ fn materialize_training_vectors(
     let rule = crate::blocking::BlockingRule {
         index: 0,
         sql: blocking_rule.to_string(),
+        arrays_to_explode: Vec::new(),
     };
 
     // Blocked pairs from the single training rule, on __splink__df_concat.
@@ -213,6 +214,7 @@ fn materialize_training_vectors(
             settings.link_type,
             &settings.source_dataset_column,
             concat.templated.as_str(),
+            &[],
         ),
         BLOCKED_ID_PAIRS,
     );

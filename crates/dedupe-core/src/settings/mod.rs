@@ -128,13 +128,9 @@ impl Settings {
 }
 
 fn compile_blocking_rule(index: usize, br: &BlockingRuleJson) -> Result<BlockingRule> {
-    if !br.arrays_to_explode().is_empty() {
-        return Err(DedupeError::settings(format!(
-            "blocking rule {index}: arrays_to_explode is not supported in v1"
-        )));
-    }
     Ok(BlockingRule {
         index,
         sql: br.sql().to_string(),
+        arrays_to_explode: br.arrays_to_explode().to_vec(),
     })
 }
