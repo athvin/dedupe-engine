@@ -303,6 +303,28 @@ def gen_link_goldens(link_type: str) -> None:
     )
 
 
+def gen_accuracy_golden() -> None:
+    """Truth-space table from the fake_1000 ground-truth `cluster` column,
+    using the trained model (label-column accuracy path)."""
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    sdf = db_api.register(df, dataset_display_name="fake_1000")
+    settings = json.loads((OUT / "model_final.json").read_text())
+    linker = Linker(sdf, settings)
+    truth_space = linker.evaluation.accuracy_analysis_from_labels_column(
+        "cluster",
+        output_type="table",
+        match_weight_round_to_nearest=0.1,
+        add_metrics=["specificity", "npv", "accuracy", "f1", "f2", "f0_5", "p4", "phi"],
+    )
+    export_table(
+        con,
+        truth_space.physical_name,
+        OUT / "accuracy_truth_space.parquet",
+        "truth_threshold",
+    )
+
+
 def gen_incremental_goldens() -> None:
     con, db_api = new_db_api()
     df = pd.read_csv(DATA)
@@ -476,6 +498,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     gen_link_goldens("link_only")
     gen_link_goldens("link_and_dedupe")
+
+    # ------------------------------------------------------------------
+    # Accuracy evaluation from the ground-truth label column.
+    # ------------------------------------------------------------------
+    gen_accuracy_golden()
 
     # ------------------------------------------------------------------
     # Manifest.

@@ -1,6 +1,6 @@
 -- templated: blocked_with_cols
--- physical: blocked_with_cols_d2cfc5e3a
-CREATE TABLE blocked_with_cols_d2cfc5e3a AS
+-- physical: blocked_with_cols_2a8e7a7a8
+CREATE TABLE blocked_with_cols_2a8e7a7a8 AS
 
     select
     "l"."unique_id" AS "unique_id_l",
@@ -24,7 +24,7 @@ CREATE TABLE blocked_with_cols_d2cfc5e3a AS
     "l"."tf_email" AS "tf_email_l",
     "r"."tf_email" AS "tf_email_r",
     b.match_key
-    from __splink__blocked_id_pairs_ceb7a8871 as b
+    from __splink__blocked_id_pairs_4006c298f as b
     inner join __splink__df_concat_with_tf as l
     on l."unique_id" = b.join_key_l
     inner join __splink__df_concat_with_tf as r

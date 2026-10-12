@@ -22,6 +22,9 @@ pub enum Command {
     /// Fold a new batch's predictions into an existing cluster assignment
     /// without re-clustering the whole graph.
     ClusterNew(ClusterNewArgs),
+    /// Evaluate model accuracy against a ground-truth label column (truth-space
+    /// table: precision/recall/F-scores/ROC rates per threshold).
+    Accuracy(AccuracyArgs),
 }
 
 /// How to locate the input records.
@@ -156,6 +159,27 @@ pub struct ClusterNewArgs {
     pub threshold: f64,
     /// Output table name written to the lake.
     #[arg(long, default_value = "clusters")]
+    pub output: String,
+    /// Also write output to this Parquet file (when not using a lake).
+    #[arg(long)]
+    pub output_parquet: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AccuracyArgs {
+    /// Trained model JSON.
+    #[arg(long)]
+    pub model: String,
+    #[command(flatten)]
+    pub source: InputSource,
+    /// Ground-truth label column (equal values = a true match).
+    #[arg(long)]
+    pub label_column: String,
+    /// Round match weights to this granularity when enumerating thresholds.
+    #[arg(long, default_value_t = 0.1)]
+    pub match_weight_round_to_nearest: f64,
+    /// Output table name written to the lake.
+    #[arg(long, default_value = "accuracy_truth_space")]
     pub output: String,
     /// Also write output to this Parquet file (when not using a lake).
     #[arg(long)]

@@ -66,6 +66,22 @@ impl<'a> Linker<'a> {
         self.model
     }
 
+    pub fn session_ref(&self) -> &'a Session {
+        self.session
+    }
+
+    pub fn settings_ref(&self) -> &Settings {
+        &self.model.settings
+    }
+
+    pub fn concat_ref(&self) -> &TableHandle {
+        &self.concat
+    }
+
+    pub fn tf_tables_ref(&self) -> &[TableHandle] {
+        &self.tf_tables
+    }
+
     /// Run the full training sequence in Splink's canonical order.
     pub fn train(&mut self, cfg: &TrainConfig) -> Result<TrainOutcome> {
         let prior = estimate_prior(

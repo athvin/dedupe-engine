@@ -162,7 +162,14 @@ impl Session {
         let physical = self.next_physical(templated);
         let path_str = path.to_string_lossy().replace('\'', "''");
         let sql = if column_types.is_empty() {
-            format!("CREATE TEMP TABLE {physical} AS SELECT * FROM read_csv('{path_str}')")
+            // Keep dates/times as strings (DATE/TIME excluded from inference),
+            // matching how Splink ingests CSVs via pandas/pyarrow — otherwise a
+            // `dob` auto-typed as DATE breaks string comparisons like
+            // `levenshtein(dob_l, dob_r)`.
+            format!(
+                "CREATE TEMP TABLE {physical} AS SELECT * FROM read_csv('{path_str}', \
+                 auto_type_candidates = ['BIGINT', 'DOUBLE', 'VARCHAR'])"
+            )
         } else {
             let cols = column_types
                 .iter()

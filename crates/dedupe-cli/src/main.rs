@@ -4,10 +4,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use args::{
-    Cli, ClusterArgs, ClusterNewArgs, Command, InputSource, LinkNewArgs, LinkNewScope, PredictArgs,
-    TrainArgs,
+    AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, InputSource, LinkNewArgs,
+    LinkNewScope, PredictArgs, TrainArgs,
 };
 use clap::Parser;
+use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
 use dedupe_core::clustering::{ClusterOptions, clustered_with_input_data, incremental_cluster};
 use dedupe_core::incremental::{predict_between, predict_within};
 use dedupe_core::linker::{Linker, TrainConfig};
@@ -29,6 +30,7 @@ fn run() -> Result<()> {
         Command::Cluster(a) => cluster(a),
         Command::LinkNew(a) => link_new(a),
         Command::ClusterNew(a) => cluster_new(a),
+        Command::Accuracy(a) => accuracy(a),
     }
 }
 
@@ -354,6 +356,38 @@ fn union_tables(session: &Session, parts: &[TableHandle]) -> Result<TableHandle>
         physical,
         columns: parts[0].columns.clone(),
     })
+}
+
+fn accuracy(a: AccuracyArgs) -> Result<()> {
+    let settings = Settings::from_json_file(Path::new(&a.model)).context("loading model JSON")?;
+    let session = open_session(&a.source)?;
+    let inputs = resolve_inputs(&session, &a.source)?;
+    let linker = build_linker(&session, settings, &inputs)?;
+
+    let truth_space = truth_space_from_labels_column(
+        linker.session_ref(),
+        linker.settings_ref(),
+        linker.concat_ref(),
+        linker.tf_tables_ref(),
+        &AccuracyOptions {
+            label_column: a.label_column,
+            match_weight_round_to_nearest: Some(a.match_weight_round_to_nearest),
+            ..Default::default()
+        },
+    )?;
+    let n = session.count(&truth_space.physical)?;
+
+    if let Some(path) = &a.output_parquet {
+        write_parquet(&session, &truth_space, path)?;
+    }
+    if a.source.catalog.is_some() {
+        session.write_to_lake(&truth_space, &a.output)?;
+        eprintln!("wrote {n} truth-space rows to lake table `{}`", a.output);
+    } else if a.output_parquet.is_none() {
+        bail!("no output target: provide --catalog (lake) or --output-parquet");
+    }
+    println!("{n}");
+    Ok(())
 }
 
 fn write_parquet(session: &Session, table: &TableHandle, path: &str) -> Result<()> {

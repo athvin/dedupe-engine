@@ -6,6 +6,7 @@
 //! parameters, match weights/probabilities, clusters), verified by golden
 //! fixtures under `fixtures/golden/`.
 
+pub mod accuracy;
 pub mod blocking;
 pub mod clustering;
 pub mod comparison;

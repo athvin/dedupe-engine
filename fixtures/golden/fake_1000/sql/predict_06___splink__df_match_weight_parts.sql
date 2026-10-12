@@ -1,6 +1,6 @@
 -- templated: __splink__df_match_weight_parts
--- physical: __splink__df_match_weight_parts_612c8be5d
-CREATE TABLE __splink__df_match_weight_parts_612c8be5d AS
+-- physical: __splink__df_match_weight_parts_0d193e93f
+CREATE TABLE __splink__df_match_weight_parts_0d193e93f AS
 
     select
     "unique_id_l",

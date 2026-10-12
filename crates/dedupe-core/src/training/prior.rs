@@ -18,7 +18,7 @@ use crate::stages::uid_expr_for;
 /// Splink's `calculate_cartesian`:
 /// - dedupe_only / link_and_dedupe: `N*(N-1)/2` over the concat
 /// - link_only: `((Σnᵢ)² − Σnᵢ²)/2` over per-dataset counts
-fn total_possible_comparisons(
+pub fn total_possible_comparisons(
     session: &Session,
     concat: &TableHandle,
     settings: &crate::settings::Settings,
