@@ -1,4 +1,4 @@
-//! Shared helpers for golden-fixture parity tests. Each integration-test
+//! Shared helpers for golden-fixture regression tests. Each integration-test
 //! binary compiles this module but uses only the helpers it needs.
 #![allow(dead_code)]
 

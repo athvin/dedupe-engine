@@ -27,7 +27,7 @@ cast_possible_wrap = "allow"
 cast_sign_loss = "allow"
 # We deliberately compare trained/fixed float params for exact equality.
 float_cmp = "allow"
-# Doc prose mentions DuckDB, DuckLake, SQL, Splink — not code spans.
+# Doc prose mentions DuckDB, DuckLake, SQL — not code spans.
 doc_markdown = "allow"
 # Public API documents errors/panics in prose, not //! sections.
 missing_errors_doc = "allow"
@@ -37,7 +37,7 @@ module_name_repetitions = "allow"
 too_many_lines = "allow"
 items_after_statements = "allow"
 struct_excessive_bools = "allow"
-# Parity-critical float/hash constants (CPython float-repr thresholds, sampling
+# Determinism-critical float/hash constants (CPython float-repr thresholds, sampling
 # moduli) — reformatting risks a transcription error for zero functional gain.
 unreadable_literal = "allow"
 # CLI command handlers and builder entry points legitimately take their args by
@@ -45,8 +45,8 @@ unreadable_literal = "allow"
 needless_pass_by_value = "allow"
 
 [workspace.dependencies]
-# Bundles DuckDB 1.5.5 — the exact engine version Splink 5.0.0's uv.lock resolves,
-# so golden fixtures and the Rust engine execute on identical DuckDB builds.
+# Bundles DuckDB 1.5.5 — the exact engine version the golden fixtures were
+# generated on, so the engine and the baselines execute on identical builds.
 duckdb = { version = "=1.10505.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

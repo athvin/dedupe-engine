@@ -159,7 +159,7 @@ fn predict_fixture(c: &mut Criterion) {
     group.bench_function("fake_1000", |b| {
         b.iter_batched(
             || {
-                let s = Session::open_in_memory(SessionOptions::parity()).unwrap();
+                let s = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
                 let input = s.register_csv(&csv, "input", &schema).unwrap();
                 (s, input)
             },

@@ -1,6 +1,6 @@
-//! M3 parity gate: predict() with the pretrained golden model must reproduce
-//! Splink's predictions — gammas exact, match weights within 1e-8, match
-//! probabilities within 1e-10.
+//! Predict golden gate: predict() with the pretrained golden model must
+//! reproduce the golden predictions — gammas exact, match weights within 1e-8,
+//! match probabilities within 1e-10.
 
 mod common;
 
@@ -13,7 +13,7 @@ use dedupe_core::session::{Session, SessionOptions};
 
 #[test]
 fn predictions_match_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();

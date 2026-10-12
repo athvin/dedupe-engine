@@ -1,5 +1,5 @@
-//! Connected components at a threshold — Splink's SQL algorithm
-//! (`connected_components.py`): min-representative propagation with a `stable`
+//! Connected components at a threshold, as a SQL algorithm:
+//! min-representative propagation with a `stable`
 //! flag that retires converged clusters from the working set. `cluster_id` is
 //! the minimum node id in each component.
 
@@ -10,7 +10,7 @@ use crate::sql::literals::pyrepr;
 use crate::sql::pipeline::CtePipeline;
 use crate::stages::uid_expr_for;
 
-/// Threshold expressed on match probability (Splink's default clustering API).
+/// Threshold expressed on match probability.
 pub struct ClusterOptions {
     pub threshold_match_probability: f64,
 }
@@ -292,9 +292,9 @@ pub fn incremental_cluster(
     Ok(output)
 }
 
-/// Node + cluster graph metrics for a clustering (Splink's
-/// `compute_graph_metrics`, node and cluster tables — edge `is_bridge`
-/// requires igraph and is omitted). Returns `(nodes, clusters)` handles.
+/// Node + cluster graph metrics for a clustering (node and cluster tables —
+/// edge `is_bridge` lives in [`edge_bridges`]). Returns `(nodes, clusters)`
+/// handles.
 ///
 /// `clustered` must carry `cluster_id` plus the id columns (e.g. the output of
 /// [`clustered_with_input_data`]). Threshold is applied to the predictions.
@@ -358,8 +358,8 @@ pub fn graph_metrics(
     Ok((nodes, clusters))
 }
 
-/// Edge metrics with `is_bridge` (Splink's igraph edge metric, computed
-/// natively in Rust with petgraph — no Python dependency). A bridge is an edge
+/// Edge metrics with `is_bridge`, computed natively in Rust with petgraph
+/// (no igraph/Python dependency). A bridge is an edge
 /// whose removal increases the number of connected components. Returns a table
 /// `(composite_unique_id_l, composite_unique_id_r, is_bridge)`, one row per
 /// thresholded prediction edge, orientation preserved.
@@ -445,9 +445,7 @@ pub fn edge_bridges(
     Ok(out)
 }
 
-/// Per-threshold cluster summary stats (Splink's
-/// `cluster_pairwise_predictions_at_multiple_thresholds` with
-/// `output_cluster_summary_stats=True`): one row per threshold with
+/// Per-threshold cluster summary stats: one row per threshold with
 /// `num_clusters`, `max_cluster_size`, `avg_cluster_size`. Each threshold is
 /// clustered independently (connected components is deterministic, so this
 /// matches the incremental implementation's output).
@@ -489,7 +487,7 @@ pub fn cluster_summary_at_thresholds(
     session.materialize(&p)
 }
 
-/// Constrained one-to-one clustering (Splink's `cluster_using_single_best_links`):
+/// Constrained one-to-one clustering (`cluster_using_single_best_links`):
 /// merge clusters only on mutual best links, never putting two records from the
 /// same "duplicate-free" source dataset in one cluster. `ties_method`
 /// `"lowest_id"` breaks rank ties by the opposite node id (the default);

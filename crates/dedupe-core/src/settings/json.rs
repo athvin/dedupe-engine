@@ -1,10 +1,9 @@
-//! Serde mirror of Splink 5.0.0's settings / saved-model JSON format.
+//! Serde mirror of the settings / saved-model JSON format.
 //!
-//! A model saved by Splink's `save_model_to_json` loads here verbatim, and
-//! re-serializing produces semantically identical JSON (unknown keys are
-//! preserved via `extra` passthrough maps). Legacy Splink 4 keys
-//! (`bayes_factor_column_prefix`, `salting_partitions`) are accepted and
-//! dropped on load, matching Splink 5's behavior.
+//! A saved model loads here verbatim, and re-serializing produces
+//! semantically identical JSON (unknown keys are preserved via `extra`
+//! passthrough maps). Legacy keys (`bayes_factor_column_prefix`,
+//! `salting_partitions`) are accepted and dropped on load.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -86,7 +85,7 @@ pub struct SettingsJson {
     pub blocking_rules_to_generate_predictions: Vec<BlockingRuleJson>,
     #[serde(default)]
     pub comparisons: Vec<ComparisonJson>,
-    /// Unknown top-level keys, preserved for round-tripping. Splink 4's
+    /// Unknown top-level keys, preserved for round-tripping. The legacy
     /// `bayes_factor_column_prefix` lands here and is ignored.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -102,8 +101,7 @@ pub enum BlockingRuleJson {
         sql_dialect: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         arrays_to_explode: Vec<String>,
-        /// Splink 4's `salting_partitions` lands here and is ignored,
-        /// matching Splink 5's deprecation behavior.
+        /// The legacy `salting_partitions` lands here and is ignored.
         #[serde(flatten)]
         extra: Map<String, Value>,
     },

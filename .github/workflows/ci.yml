@@ -77,7 +77,7 @@ jobs:
         run: cargo test -p dedupe-core --test extensions
 
   scale-tests:
-    name: scale parity (50k)
+    name: scale golden (50k)
     runs-on: ubuntu-latest
     env:
       DEDUPE_SCALE_TESTS: "1"
@@ -85,4 +85,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p dedupe-core --test parity_historical_50k
+      - run: cargo test -p dedupe-core --test golden_historical_50k

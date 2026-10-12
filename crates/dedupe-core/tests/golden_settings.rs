@@ -1,6 +1,7 @@
-//! M1 parity gate: the compiled settings model must agree with Splink's own
-//! introspection of the same model JSON (gamma values, referenced columns,
-//! exact-match detection, TF flags), and saved-model JSON must round-trip.
+//! Settings golden gate: the compiled settings model must agree with the
+//! golden introspection of the same model JSON (gamma values, referenced
+//! columns, exact-match detection, TF flags), and saved-model JSON must
+//! round-trip.
 
 mod common;
 
@@ -17,7 +18,7 @@ fn as_str_set(v: &Value) -> BTreeSet<String> {
 }
 
 #[test]
-fn compiled_settings_match_splink_introspection() {
+fn compiled_settings_match_golden_introspection() {
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
     let intro = load_golden_json("settings_introspection.json");
     let intro_comparisons = intro["comparisons"].as_array().unwrap();
@@ -91,7 +92,7 @@ fn compiled_settings_match_splink_introspection() {
     }
 }
 
-/// Fill in Splink's serialization defaults so semantically-equal JSON compares
+/// Fill in the model format's serialization defaults so semantically-equal JSON compares
 /// equal even when one side omits default-valued keys.
 fn normalize(v: &mut Value) {
     if let Some(comparisons) = v.get_mut("comparisons").and_then(|c| c.as_array_mut()) {

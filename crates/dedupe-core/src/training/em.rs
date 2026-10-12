@@ -1,5 +1,4 @@
-//! Expectation-maximisation training (Splink 5), the
-//! `estimate_without_term_frequencies=True` path.
+//! Expectation-maximisation training, the without-term-frequencies path.
 //!
 //! One session trains the comparisons NOT consumed by the training blocking
 //! rule, starting from a blocking-adjusted prior. Each iteration scores the
@@ -106,7 +105,7 @@ pub struct EmOptions {
 
 impl Default for EmOptions {
     fn default() -> Self {
-        // Splink defaults: EM trains m only.
+        // Default: EM trains m only.
         EmOptions {
             fix_m: false,
             fix_u: true,
@@ -484,7 +483,7 @@ pub fn run_em_session(
                 continue;
             };
             // Normalization denominators exclude the null level (gamma = -1),
-            // matching Splink's `where comparison_vector_value != -1`.
+            // i.e. `where comparison_vector_value != -1`.
             let m_total: f64 = level_counts
                 .iter()
                 .filter(|(g, _)| **g != -1)
@@ -599,7 +598,7 @@ fn snapshot(working: &[WorkingComparison], lambda: f64) -> Iteration {
     Iteration { lambda, params }
 }
 
-/// Splink's convergence metric: max over non-null levels of max(|Δm|, |Δu|),
+/// Convergence metric: max over non-null levels of max(|Δm|, |Δu|),
 /// compared against |Δλ|.
 fn max_abs_change(prev: &Iteration, this: &Iteration) -> f64 {
     let mut max_change = -0.1_f64;

@@ -1,6 +1,5 @@
 //! Trained-parameter history and combination. Multiple training estimates
-//! (per comparison level) are combined by Python-`statistics.median`, matching
-//! Splink's `_populate_m_u_from_trained_values`.
+//! (per comparison level) are combined by Python-`statistics.median`.
 
 use std::collections::BTreeMap;
 
@@ -44,9 +43,9 @@ pub struct DetailedRecord {
 }
 
 /// Python `statistics.median`: for even n, the mean of the two middle values.
-// Keep the literal `(a + b) / 2.0` form (not `f64::midpoint`) so the result is
-// bit-identical to Splink's Python `statistics.median` used to generate the
-// golden parameter estimates — the EM/median parity gates compare to 1e-10.
+// Keep the literal `(a + b) / 2.0` form (not `f64::midpoint`) so the result
+// stays bit-identical to the Python `statistics.median` runs that generated
+// the golden parameter estimates — the EM/median golden gates compare to 1e-10.
 #[allow(clippy::manual_midpoint)]
 pub fn median(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
@@ -106,9 +105,9 @@ impl TrainedModel {
     /// fixed value are left as-is.
     pub fn populate_from_trained_values(&mut self) {
         // Combine trained estimates: median of the NUMERIC estimates only
-        // (sentinel "not observed" values are filtered out, matching Splink's
-        // `_trained_*_median`). If no numeric estimates remain, the slot is
-        // left unchanged so it falls back to the Splink default.
+        // (sentinel "not observed" values are filtered out). If no numeric
+        // estimates remain, the slot is left unchanged so it falls back to
+        // the built-in default.
         let combine = |history: &BTreeMap<LevelKey, Vec<ParamEstimate>>, key: &LevelKey| {
             history.get(key).and_then(|estimates| {
                 let values: Vec<f64> = estimates
@@ -148,7 +147,7 @@ impl TrainedModel {
 
     /// The trained model parameters as flat records — one per comparison level
     /// plus a `probability_two_random_records_match` row. This is the data
-    /// behind Splink's match-weights / m-u charts (`parameters_as_detailed_records`).
+    /// behind match-weights / m-u charts in a downstream frontend.
     pub fn detailed_records(&self) -> Vec<DetailedRecord> {
         let mut out = Vec::new();
         for c in &self.settings.comparisons {
@@ -173,7 +172,7 @@ impl TrainedModel {
                 });
             }
         }
-        // The prior as a record (match_key 0), mirroring Splink's layout.
+        // The prior as a record (match_key 0).
         let lambda = self.settings.prior;
         out.push(DetailedRecord {
             comparison_name: "probability_two_random_records_match".to_string(),

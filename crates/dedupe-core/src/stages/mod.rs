@@ -1,4 +1,4 @@
-//! One builder per Splink pipeline stage. All v5-SQL-shape-sensitive code
+//! One builder per pipeline stage. All SQL-shape-sensitive code
 //! lives here, written against the captured golden SQL in
 //! `fixtures/golden/fake_1000/sql/`.
 
@@ -8,7 +8,7 @@ pub mod score;
 pub mod tf;
 pub mod vectors;
 
-/// Splink's composite unique-id separator (`unique_id_concat.py`).
+/// Composite unique-id separator for multi-dataset link types.
 pub const CONCAT_SEPARATOR: &str = "-__-";
 
 /// Renders the unique-id expression for one side of a join (`l` or `r`).

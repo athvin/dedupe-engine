@@ -41,8 +41,8 @@ impl Settings {
 
     pub fn compile(json: SettingsJson) -> Result<Settings> {
         let prior = json.probability_two_random_records_match;
-        // Splink 5 has no guard for prior == 1.0 and would emit an invalid
-        // `inf` literal into SQL; we reject it (and 0, which is log2(0)).
+        // A prior of 1.0 would emit an invalid `inf` literal into SQL; we
+        // reject it (and 0, which is log2(0)).
         if !(0.0..1.0).contains(&prior) || prior == 0.0 {
             return Err(DedupeError::settings(format!(
                 "probability_two_random_records_match must be in (0, 1), got {prior}"
@@ -89,7 +89,7 @@ impl Settings {
     }
 
     /// Re-emit settings JSON reflecting the CURRENT compiled state (prior and
-    /// per-level m/u written back), Splink `save_model_to_json`-compatible.
+    /// per-level m/u written back), in the saved-model JSON format.
     pub fn to_settings_json(&self) -> SettingsJson {
         let mut out = self.json.clone();
         out.probability_two_random_records_match = self.prior;

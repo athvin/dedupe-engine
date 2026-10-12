@@ -1,9 +1,9 @@
-//! Accuracy evaluation from ground-truth labels (Splink's label-column path).
+//! Accuracy evaluation from ground-truth labels (the label-column path).
 //!
 //! Produces the "truth-space table": one row per match-weight threshold with
 //! the confusion-matrix counts (TP/FP/TN/FN) and derived metrics (precision,
 //! recall, F-scores, specificity, NPV, accuracy, φ, ROC rates). This is the
-//! data behind Splink's accuracy / ROC / precision-recall charts; no charts
+//! data behind accuracy / ROC / precision-recall charts; no charts
 //! are produced here.
 //!
 //! The label-column path assigns truth from equality of a ground-truth column
@@ -60,7 +60,7 @@ pub struct AccuracyOptions {
     /// A clerical/label score at or above this counts as a true match.
     pub threshold_actual: f64,
     /// Round match weights to this granularity before enumerating thresholds
-    /// (`None` = every distinct weight). Splink's default is 0.1.
+    /// (`None` = every distinct weight); 0.1 is the typical choice.
     pub match_weight_round_to_nearest: Option<f64>,
     /// Push clerical positives missed by blocking to a sentinel threshold so
     /// they count as false negatives at every real threshold.
@@ -322,7 +322,7 @@ pub fn truth_space_from_labels_column(
     Ok(out)
 }
 
-/// Score a labels table's pairs (Splink's `block_from_labels` + predict):
+/// Score a labels table's pairs:
 /// normalize each labelled pair to lower-id-on-left, score it with the model,
 /// and attach `clerical_match_score` (verbatim) and `found_by_blocking_rules`
 /// (OR of model rules). Returns a `labels_with_predictions`-shaped table.
@@ -438,8 +438,8 @@ pub fn truth_space_from_labels_table(
     Ok(out)
 }
 
-/// False positives / false negatives vs a labels table (Splink's
-/// `prediction_errors_from_labels_table`): adds a `truth_status` column.
+/// False positives / false negatives vs a labels table: adds a
+/// `truth_status` column.
 #[allow(clippy::too_many_arguments)]
 pub fn prediction_errors_from_labels_table(
     session: &Session,
@@ -523,8 +523,8 @@ pub fn unlinkables_data(
     Ok(out)
 }
 
-/// False positives / false negatives vs a ground-truth label column
-/// (Splink's `prediction_errors_from_labels_column`). Returns the labelled
+/// False positives / false negatives vs a ground-truth label column.
+/// Returns the labelled
 /// predictions filtered to errors (with `clerical_match_score` and
 /// `found_by_blocking_rules`). FN includes true matches missed by blocking.
 #[allow(clippy::too_many_arguments)]

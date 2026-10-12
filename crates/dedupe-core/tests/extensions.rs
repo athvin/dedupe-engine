@@ -14,7 +14,7 @@ fn rejects_invalid_extension_name() {
     // blocks SQL injection via the extension name.
     let result = Session::open_in_memory(SessionOptions {
         extensions: vec!["rapidfuzz; drop table x".into()],
-        ..SessionOptions::parity()
+        ..SessionOptions::deterministic()
     });
     assert!(
         result.is_err(),
@@ -31,7 +31,7 @@ fn loads_rapidfuzz_and_exposes_its_functions() {
     let session = Session::open_in_memory(SessionOptions {
         extensions: vec!["rapidfuzz".into()],
         install_extensions: true,
-        ..SessionOptions::parity()
+        ..SessionOptions::deterministic()
     })
     .unwrap();
 

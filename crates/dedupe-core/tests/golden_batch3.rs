@@ -1,5 +1,5 @@
-//! Batch-3 parity: prediction errors (column + table), labels-table accuracy,
-//! and unlinkables — vs Splink goldens.
+//! Batch-3 golden gates: prediction errors (column + table), labels-table
+//! accuracy, and unlinkables — vs the committed goldens.
 
 mod common;
 
@@ -16,7 +16,7 @@ use dedupe_core::predict;
 use dedupe_core::session::{Session, SessionOptions, TableHandle};
 
 fn setup() -> (Session, Settings, TableHandle, Vec<TableHandle>) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -29,7 +29,7 @@ fn setup() -> (Session, Settings, TableHandle, Vec<TableHandle>) {
 fn reg_labels(session: &Session) -> TableHandle {
     let p = golden_dir().join("labels_table.parquet");
     let p = p.to_string_lossy().replace('\'', "''");
-    // Splink's labels table uses `_l`/`_r`-suffixed id columns.
+    // The golden labels table uses `_l`/`_r`-suffixed id columns.
     session
         .register_table(
             &format!(

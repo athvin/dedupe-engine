@@ -1,5 +1,5 @@
 //! Validates that the committed golden fixtures match MANIFEST.json exactly —
-//! catching accidental edits or partial regeneration of the parity spec.
+//! catching accidental edits or partial regeneration of the golden baselines.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

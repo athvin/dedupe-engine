@@ -1,8 +1,6 @@
-//! Column extraction from raw SQL condition strings — the Rust equivalent of
-//! Splink's sqlglot-based helpers in `splink/internals/parse_sql.py` and
-//! `comparison_level.py`.
+//! Column extraction from raw SQL condition strings.
 //!
-//! Parity notes (verified against Splink 5.0.0 source):
+//! Behavior notes:
 //! - `get_columns_used_from_sql`: every Column node in the tree, skipping any
 //!   column inside a lambda body, treating `col[idx]` subscripts as `col`.
 //! - `_input_columns_used_by_sql_condition`: the above, with `_l`/`_r`
@@ -38,14 +36,13 @@ pub fn parse_expr(sql: &str, context: &str) -> Result<Expr> {
 }
 
 /// All column references in source order (pre-order traversal), excluding any
-/// that appear inside lambda bodies, mirroring Splink's
-/// `get_columns_used_from_sql`.
+/// that appear inside lambda bodies.
 pub fn columns_used(sql: &str, context: &str) -> Result<Vec<ColumnRef>> {
     let expr = parse_expr(sql, context)?;
     let mut all: Vec<ColumnRef> = Vec::new();
     collect_columns(&expr, &mut all);
 
-    // Subtract columns that appear under lambdas (Splink skips them).
+    // Subtract columns that appear under lambdas.
     let mut lambda_cols: Vec<ColumnRef> = Vec::new();
     let _ = visit_expressions(&expr, |e: &Expr| {
         if let Expr::Lambda(lf) = e {
@@ -96,7 +93,7 @@ fn strip_lr_suffix(name: &str) -> &str {
     }
 }
 
-/// Splink's `_input_columns_used_by_sql_condition`: referenced base column
+/// Referenced base column
 /// names with `_l`/`_r` stripped, deduped preserving order of appearance.
 pub fn input_columns(sql_condition: &str, context: &str) -> Result<Vec<String>> {
     if is_else_condition(sql_condition) {
@@ -143,7 +140,7 @@ fn as_bare_column(expr: &Expr) -> Option<String> {
     }
 }
 
-/// Splink's `_is_exact_match` + `_exact_match_colnames` combined: returns
+/// Exact-match detection: returns
 /// `Some(base_columns)` (lowercased, one per conjunct) if every top-level AND
 /// conjunct is an equality of two bare columns whose names match after
 /// unconditionally stripping the final two characters; otherwise `None`.
@@ -165,8 +162,8 @@ pub fn exact_match_columns(sql_condition: &str, context: &str) -> Result<Option<
         let (Some(l), Some(r)) = (as_bare_column(left), as_bare_column(right)) else {
             return Ok(None);
         };
-        // Splink truncates the last two characters unconditionally ([:-2])
-        // and compares; it lowercases the whole condition before parsing.
+        // The last two characters are truncated unconditionally ([:-2]) and
+        // compared; the whole condition is lowercased before parsing.
         if l.len() < 2 || r.len() < 2 {
             return Ok(None);
         }

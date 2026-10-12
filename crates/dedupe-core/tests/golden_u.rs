@@ -1,5 +1,6 @@
-//! M4 parity gate: prior estimation (exact), the hash-sampled record set
-//! (exact), and u probabilities (default + simple paths) vs Splink goldens.
+//! u-estimation golden gate: prior estimation (exact), the hash-sampled
+//! record set (exact), and u probabilities (default + simple paths) vs the
+//! committed goldens.
 
 mod common;
 
@@ -22,7 +23,7 @@ const DETERMINISTIC_RULES: &[&str] = &[
 const RECALL: f64 = 0.7;
 
 fn setup() -> (Session, TableHandle) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -117,7 +118,7 @@ fn sampled_record_set_matches_golden() {
     let (session, concat) = setup();
 
     // Re-derive the deterministic sample filter the way estimate_u does and
-    // compare the selected record set to Splink's.
+    // compare the selected record set to the golden one.
     let proportion = {
         let total = session.count(&concat.physical).unwrap() as f64;
         let sample_size = 0.5 * ((8.0_f64 * 2e5 + 1.0).sqrt() + 1.0);

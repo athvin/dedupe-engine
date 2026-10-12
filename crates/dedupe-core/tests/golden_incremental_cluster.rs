@@ -1,11 +1,10 @@
-//! Incremental-clustering parity gate.
+//! Incremental-clustering equivalence gate.
 //!
-//! There is no Splink incremental-clustering API to mirror, but connected
-//! components is a pure function of (nodes, edges): folding a new batch's
-//! edges into an existing cluster assignment must yield exactly the same
-//! partition as fully re-clustering the combined edge set. The full
-//! re-cluster (`cluster_at_threshold`) is itself golden-verified against
-//! Splink (see parity_cluster.rs), so it is a sound oracle here.
+//! Connected components is a pure function of (nodes, edges): folding a new
+//! batch's edges into an existing cluster assignment must yield exactly the
+//! same partition as fully re-clustering the combined edge set. The full
+//! re-cluster (`cluster_at_threshold`) is itself golden-verified (see
+//! golden_cluster.rs), so it is a sound oracle here.
 
 mod common;
 
@@ -49,7 +48,7 @@ fn opts() -> ClusterOptions {
 
 #[test]
 fn incremental_cluster_equals_full_recluster() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
 
     // Existing (900), new (100), and the full set (1000) of nodes.

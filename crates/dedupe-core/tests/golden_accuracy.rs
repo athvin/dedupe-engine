@@ -1,6 +1,6 @@
-//! Accuracy-evaluation parity gate: the truth-space table computed from the
-//! fake_1000 ground-truth `cluster` column must match Splink's
-//! `accuracy_analysis_from_labels_column(..., output_type="table")`.
+//! Accuracy-evaluation golden gate: the truth-space table computed from the
+//! fake_1000 ground-truth `cluster` column must match the committed golden
+//! baseline.
 
 mod common;
 
@@ -14,7 +14,7 @@ use dedupe_core::session::{Session, SessionOptions};
 
 #[test]
 fn truth_space_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();

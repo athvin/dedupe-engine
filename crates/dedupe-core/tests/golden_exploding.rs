@@ -1,10 +1,10 @@
-//! Parity gate for exploding (array-membership) blocking rules. The golden
+//! Golden gate for exploding (array-membership) blocking rules. The golden
 //! dataset has a LIST `tokens` column and two blocking rules — a scalar
 //! `first_name` rule and an exploding `arrays_to_explode: ["tokens"]` rule —
-//! exercising the full Splink mechanism: per-rule marginal exploded id-pairs
+//! exercising the full mechanism: per-rule marginal exploded id-pairs
 //! tables, the `false` exclusion contributed by preceding exploding rules, and
 //! the `min(match_key)` two-stage dedup that collapses cross-rule duplicate
-//! pairs. See `fixtures/gen_golden.py::gen_exploding_golden`.
+//! pairs.
 
 mod common;
 
@@ -25,7 +25,7 @@ fn exploding_predictions_match_golden() {
     let people = dir.join("people.parquet");
     let people_str = people.to_string_lossy().replace('\'', "''");
 
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     // Register the parquet (preserving the LIST `tokens` column) as the input.
     let input = session
         .register_table(&format!("read_parquet('{people_str}')"), "people")

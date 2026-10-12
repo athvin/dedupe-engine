@@ -1,6 +1,6 @@
 # Performance & Scaling
 
-This engine is a **SQL generator**: it builds Splink's `__splink__*` CTE
+This engine is a **SQL generator**: it builds a `__splink__*`-templated CTE
 pipeline and executes it on a single DuckDB connection per [`Session`]. DuckDB
 is the compute engine — it is columnar, vectorized, multi-threaded, and spills
 to disk when a workload exceeds memory. So performance tuning is mostly about
@@ -119,12 +119,11 @@ with spilling — split predict into **hash chunks**:
 *right* record satisfies `hash(uid_r) % N == i`, and the passes are unioned.
 Because the dedupe where-clause fixes `uid_l < uid_r`, every pair has one right
 record, so each pair lands in exactly one chunk — **the result is byte-identical
-to the single-shot path** (`parity_chunking.rs` asserts chunked == golden),
+to the single-shot path** (`golden_chunking.rs` asserts chunked == golden),
 while the blocked-pairs and scoring intermediates for one pass are ~`1/N` of the
 whole. The concat and TF tables are built once and reused across passes. `N = 1`
-is the default and dispatches straight to the unchunked path. This mirrors
-Splink's `num_chunks` (RHS hash chunking), deliberately defaulted to 1 so parity
-is preserved until you opt into chunking.
+is the default and dispatches straight to the unchunked path, so results are
+untouched until you opt into chunking.
 
 By default the passes accumulate into one temp table, so the *final result*
 still lands in memory (DuckDB spills it if needed). For **constant memory end to
@@ -142,8 +141,9 @@ afterwards with `dedupe maintenance --checkpoint`. Pair `--stream` with
 ## Everything runs inside DuckDB (no network, no Python UDFs)
 
 A common question is whether moving work into DuckDB UDFs would cut network
-overhead and speed things up. For *Python* Splink that matters (Python UDFs are
-slow and cross a process boundary). It does **not** apply here: DuckDB is
+overhead and speed things up. For engines that drive DuckDB from Python that
+matters (Python UDFs are slow and cross a process boundary). It does **not**
+apply here: DuckDB is
 statically bundled into this Rust binary and runs **in-process**, and the engine
 generates SQL that calls DuckDB's **native C++ built-ins**. There is no Python,
 no RPC, no DuckDB server — the whole pipeline (blocking, comparison vectors,
@@ -173,7 +173,7 @@ algorithm). Nothing streams the candidate pairs out of DuckDB.
 >   `(i64, i32, i32)` fetch instead of `Vec<Vec<String>>`, and build a
 >   `UnGraphMap<u32>`. That drops the per-cell `String` allocations and replaces
 >   string hashing with integer hashing (likely well under 1s). Guarded by the
->   `edge_bridges_match_golden` parity test.
+>   `edge_bridges_match_golden` regression test.
 >
 > Either way this only touches `edge_bridges` (run on the confident-edge subset,
 > opt-in), never the predict/cluster hot path — which is already fully in DuckDB

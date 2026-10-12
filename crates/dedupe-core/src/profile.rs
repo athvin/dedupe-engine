@@ -1,4 +1,4 @@
-//! Data profiling (Splink's `completeness_data` / `profile_columns` data).
+//! Data profiling: column completeness and value-frequency distributions.
 //! Backend data only — no charts.
 
 use crate::error::Result;
@@ -7,8 +7,7 @@ use crate::settings::Settings;
 use crate::sql::pipeline::CtePipeline;
 
 /// Per-column completeness (non-null proportion), one row per column (and per
-/// source dataset for link types). Mirrors Splink's `completeness_data`;
-/// `completeness` is single-precision like Splink.
+/// source dataset for link types); `completeness` is single-precision.
 pub fn completeness(
     session: &Session,
     settings: &Settings,
@@ -39,8 +38,7 @@ pub fn completeness(
 }
 
 /// Per-column value-frequency distribution: one row per distinct non-null
-/// value with its count and per-column totals (Splink's profile value
-/// frequencies). `group_name` is the column.
+/// value with its count and per-column totals. `group_name` is the column.
 pub fn column_value_frequencies(
     session: &Session,
     concat: &TableHandle,

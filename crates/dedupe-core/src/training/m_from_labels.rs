@@ -1,4 +1,4 @@
-//! Estimate m from ground truth (Splink's `estimate_m_from_label_column` and
+//! Estimate m from ground truth (`estimate_m_from_label_column` and
 //! `estimate_m_from_pairwise_labels`).
 //!
 //! Known-match pairs are generated (by equality of a label column, or from a

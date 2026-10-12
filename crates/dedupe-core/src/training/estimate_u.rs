@@ -1,4 +1,4 @@
-//! `estimate_u_using_random_sampling` (Splink 5).
+//! u estimation via deterministic random sampling.
 //!
 //! Deterministic hash sampling of records, then a per-comparison
 //! "block-and-count" over the cartesian product of the sample with
@@ -229,7 +229,7 @@ pub fn estimate_u(
     let settings = &model.settings;
 
     let total_nodes = session.count(&concat.physical)? as f64;
-    // Sampling proportion by link type (Splink): dedupe/link_and_dedupe invert
+    // Sampling proportion by link type: dedupe/link_and_dedupe invert
     // the pairs-from-rows formula; link_only uses sqrt(max_pairs / total_links)
     // over the pairwise cross-dataset total.
     let mut proportion = if settings.link_type == crate::settings::json::LinkType::LinkOnly {

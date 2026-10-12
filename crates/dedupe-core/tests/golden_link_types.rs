@@ -1,4 +1,4 @@
-//! Link-type parity gate: link_only and link_and_dedupe over two datasets
+//! Link-type golden gate: link_only and link_and_dedupe over two datasets
 //! (df_a / df_b derived from fake_1000). Verifies inference (predict +
 //! cluster) from the trained golden model, and full training-from-scratch
 //! (prior + u + EM) reproducing the golden trained parameters.
@@ -61,7 +61,7 @@ fn mw_cols() -> Vec<(&'static str, f64)> {
 }
 
 fn run_inference(link_type: &str) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let settings =
         Settings::from_json_str(&load_golden_text(&format!("link_{link_type}_model.json")))
             .unwrap();
@@ -108,7 +108,7 @@ fn run_inference(link_type: &str) {
 }
 
 fn run_training(link_type: &str) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text(&format!(
         "link_{link_type}_model_initial.json"
     )))

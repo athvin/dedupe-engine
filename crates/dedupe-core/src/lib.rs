@@ -1,10 +1,10 @@
-//! dedupe-core: a Rust reimplementation of Splink 5.0.0's Fellegi-Sunter
-//! record-linkage engine, narrowly scoped to DuckDB/DuckLake execution.
+//! dedupe-core: a Fellegi-Sunter probabilistic record-linkage engine,
+//! narrowly scoped to DuckDB/DuckLake execution.
 //!
-//! Parity contract: given the same settings JSON and input data, this engine
-//! must reproduce Python Splink 5.0.0's outputs on DuckDB exactly (trained
-//! parameters, match weights/probabilities, clusters), verified by golden
-//! fixtures under `fixtures/golden/`.
+//! Regression contract: given the same settings JSON and input data, the
+//! engine must reproduce the committed golden baselines exactly (trained
+//! parameters, match weights/probabilities, clusters) — see
+//! `fixtures/golden/`.
 
 pub mod accuracy;
 pub mod blocking;
@@ -32,14 +32,3 @@ pub use session::{Session, SessionOptions};
 pub use settings::Settings;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// The Splink version whose behavior this engine replicates.
-pub const SPLINK_PARITY_VERSION: &str = "5.0.0";
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn smoke() {
-        assert_eq!(super::SPLINK_PARITY_VERSION, "5.0.0");
-    }
-}

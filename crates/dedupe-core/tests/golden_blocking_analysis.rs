@@ -1,5 +1,5 @@
-//! Blocking-analysis parity gate: per-rule comparison counts must match
-//! Splink's `count_comparisons_from_blocking_rules(record_sample_proportion=1.0)`.
+//! Blocking-analysis golden gate: per-rule comparison counts (full sample,
+//! marginal + cumulative) must match the committed goldens.
 
 mod common;
 
@@ -11,7 +11,7 @@ use dedupe_core::session::{Session, SessionOptions};
 
 #[test]
 fn blocking_counts_match_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();

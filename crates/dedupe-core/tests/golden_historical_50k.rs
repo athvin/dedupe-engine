@@ -1,6 +1,6 @@
-//! Scale/diversity parity gate on a second, larger dataset (historical_50k:
+//! Scale/diversity golden gate on a second, larger dataset (historical_50k:
 //! 50,578 records, richer schema, high null rates). Full pipeline — train
-//! (prior + u + EM), predict, cluster — vs Splink goldens.
+//! (prior + u + EM), predict, cluster — vs the committed goldens.
 
 mod common;
 
@@ -71,7 +71,7 @@ fn historical_50k_training_matches_golden() {
         eprintln!("skipping historical_50k scale test (set DEDUPE_SCALE_TESTS=1)");
         return;
     }
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = register(&session);
     let settings = Settings::from_json_str(&golden_text("model_initial.json")).unwrap();
     let mut model = TrainedModel::new(settings);
@@ -152,7 +152,7 @@ fn historical_50k_predict_and_cluster_match_golden() {
         eprintln!("skipping historical_50k scale test (set DEDUPE_SCALE_TESTS=1)");
         return;
     }
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = register(&session);
     let settings = Settings::from_json_str(&golden_text("model_final.json")).unwrap();
 

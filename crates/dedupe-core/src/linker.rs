@@ -1,5 +1,5 @@
-//! High-level orchestration façade over a `Session`, mirroring the stages a
-//! Splink user runs: train (prior -> u -> EM sessions), predict, cluster.
+//! High-level orchestration façade over a `Session`:
+//! train (prior -> u -> EM sessions), predict, cluster.
 
 use crate::clustering::{ClusterOptions, cluster_at_threshold, clustered_with_input_data};
 use crate::error::Result;
@@ -24,7 +24,7 @@ pub struct TrainOutcome {
     pub em_sessions: Vec<EmSessionResult>,
 }
 
-/// Orchestrates the full Splink workflow against one registered input table.
+/// Orchestrates the full linkage workflow against one registered input table.
 pub struct Linker<'a> {
     session: &'a Session,
     model: TrainedModel,
@@ -82,7 +82,7 @@ impl<'a> Linker<'a> {
         &self.tf_tables
     }
 
-    /// Run the full training sequence in Splink's canonical order.
+    /// Run the full training sequence: prior, then u, then EM sessions.
     pub fn train(&mut self, cfg: &TrainConfig) -> Result<TrainOutcome> {
         let prior = estimate_prior(
             self.session,
@@ -252,7 +252,7 @@ impl<'a> Linker<'a> {
     }
 }
 
-/// Splink converts a probability threshold to a match-weight threshold for the
+/// Convert a probability threshold to a match-weight threshold for the
 /// predict filter; a threshold of 0 means "no filter".
 fn prob_threshold_to_mw(p: f64) -> Option<f64> {
     if p <= 0.0 {

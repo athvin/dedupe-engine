@@ -1,5 +1,5 @@
-//! Batch-1 parity: deterministic_link, score_pairs, model detailed records,
-//! n_largest_blocks — all against Splink goldens.
+//! Batch-1 golden gates: deterministic_link, score_pairs, model detailed
+//! records, n_largest_blocks — all against the committed goldens.
 
 mod common;
 
@@ -15,7 +15,7 @@ use dedupe_core::predict;
 use dedupe_core::session::{Session, SessionOptions, TableHandle};
 
 fn session_with_input() -> (Session, Settings, TableHandle) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();

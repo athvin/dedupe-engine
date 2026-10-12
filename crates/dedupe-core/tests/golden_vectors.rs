@@ -1,5 +1,6 @@
-//! M2 parity gate: concat, TF join, blocked id pairs, and comparison vectors
-//! must match Splink's per-stage debug materializations exactly on fake_1000.
+//! Comparison-vector golden gate: concat, TF join, blocked id pairs, and
+//! comparison vectors must match the committed per-stage golden
+//! materializations exactly on fake_1000.
 
 mod common;
 
@@ -17,7 +18,7 @@ struct Fixture {
 }
 
 fn setup() -> Fixture {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();

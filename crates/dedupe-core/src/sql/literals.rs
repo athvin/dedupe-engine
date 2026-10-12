@@ -1,6 +1,6 @@
 //! CPython-compatible float formatting (`repr(float)`), used when baking
-//! trained parameters into SQL so generated text diffs cleanly against
-//! Splink's. Shortest round-trip digits; scientific notation iff the decimal
+//! trained parameters into SQL so generated text diffs cleanly against the
+//! captured golden SQL. Shortest round-trip digits; scientific notation iff the decimal
 //! exponent is < -4 or >= 16; integral floats keep a trailing `.0`.
 
 pub fn pyrepr(x: f64) -> String {

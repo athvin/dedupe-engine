@@ -5,29 +5,29 @@ use crate::error::{DedupeError, Result};
 use crate::settings::json::{ComparisonJson, ComparisonLevelJson};
 use crate::sql::columns;
 
-/// Input guard from Splink 5 (`comparison_level.py::M_U_CLAMP_MIN`):
+/// Input guard:
 /// m/u probabilities below this are rejected at construction, and clamped to
 /// this floor before `log2` during scoring.
 pub const M_U_CLAMP_MIN: f64 = 1e-300;
 
-/// Splink's `LEVEL_NOT_OBSERVED_TEXT` sentinel reads as this value.
+/// The "level not observed" sentinel reads as this value.
 pub const LEVEL_NOT_OBSERVED_VALUE: f64 = 1e-6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProbabilitySlot {
     /// No value available (untrained, not supplied in settings). Reads as the
-    /// Splink default for the level's position (see `default_m_values` /
+    /// built-in default for the level's position (see `default_m_values` /
     /// `default_u_values`).
     Unset,
     /// A concrete probability (from settings JSON or training).
     Value(f64),
-    /// Level never observed during training (Splink's LEVEL_NOT_OBSERVED);
+    /// Level never observed during training;
     /// reads as 1e-6 regardless of defaults.
     NotObserved,
 }
 
 impl ProbabilitySlot {
-    /// Resolve the slot given the level's default (Splink's getter semantics):
+    /// Resolve the slot given the level's default:
     /// `Value` wins; `NotObserved` -> 1e-6; `Unset` -> the supplied default.
     pub fn resolve(&self, default: f64) -> f64 {
         match self {
@@ -45,7 +45,7 @@ impl ProbabilitySlot {
     }
 }
 
-/// Splink's `_default_m_values`: 0.95 on the top (highest-gamma) level, the
+/// Default m values: 0.95 on the top (highest-gamma) level, the
 /// remaining 0.05 split evenly, indexed by gamma 0..n-1.
 pub fn default_m_values(num_levels: usize) -> Vec<f64> {
     let n = num_levels as f64;
@@ -63,7 +63,7 @@ fn interpolate(start: f64, end: f64, num_elements: usize) -> Vec<f64> {
         .collect()
 }
 
-/// Splink's `_default_u_values`: `m / 2^w` where match weights interpolate
+/// Default u values: `m / 2^w` where match weights interpolate
 /// from -5 to 3 across the non-top levels, with 10 for the top level.
 pub fn default_u_values(num_levels: usize) -> Vec<f64> {
     let m_vals = default_m_values(num_levels);
@@ -102,7 +102,7 @@ pub struct ComparisonLevel {
     pub is_else: bool,
     pub m: ProbabilitySlot,
     pub u: ProbabilitySlot,
-    /// Splink defaults for this level's gamma position; used when m/u is Unset.
+    /// Built-in defaults for this level's gamma position; used when m/u is Unset.
     pub default_m: f64,
     pub default_u: f64,
     pub fix_m: bool,
@@ -112,7 +112,7 @@ pub struct ComparisonLevel {
     /// `_l`/`_r` stripped, deduped).
     pub input_columns: Vec<String>,
     /// `Some(cols)` iff the condition is a conjunction of bare-column
-    /// equalities (Splink's exact-match shape). ELSE levels are never exact.
+    /// equalities (the exact-match shape). ELSE levels are never exact.
     pub exact_match_columns: Option<Vec<String>>,
 }
 
@@ -154,7 +154,7 @@ impl Comparison {
             .map(|lj| compile_level(lj, name))
             .collect::<Result<_>>()?;
 
-        // Gamma assignment — Splink's Comparison.__init__: null levels get -1
+        // Gamma assignment: null levels get -1
         // and do not consume a number; others count DOWN from n_nonnull - 1.
         let n_nonnull = levels.iter().filter(|l| !l.is_null_level).count();
         if n_nonnull == 0 {

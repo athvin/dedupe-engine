@@ -1,6 +1,6 @@
 //! M7 end-to-end gate: drive train -> predict -> cluster entirely through the
 //! CLI against a real DuckLake catalog, then re-read the lake with a fresh
-//! connection and assert the clusters match the Splink golden.
+//! connection and assert the clusters match the committed golden.
 //!
 //! Gated behind `DEDUPE_E2E_DUCKLAKE=1` since it installs the `ducklake`
 //! extension (network on first run).

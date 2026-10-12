@@ -1,5 +1,5 @@
-//! Assembles the predict-pipeline stages. Mirrors Splink 5's `_predict_chunk`
-//! (single-chunk path): blocked pairs are materialized from
+//! Assembles the predict-pipeline stages (single-chunk path): blocked pairs
+//! are materialized from
 //! `__splink__df_concat`; comparison vectors (and later scoring) run as one
 //! CTE pipeline over the blocked pairs with `__splink__df_concat_with_tf`
 //! re-derived as a CTE.
@@ -65,8 +65,8 @@ pub fn materialize_tf_tables(
 }
 
 /// Materialize `__splink__blocked_id_pairs` (blocking reads the concat, not
-/// concat_with_tf). Materialized rather than inlined, matching Splink's
-/// default and sidestepping the DuckDB UNION-ALL pushdown regression.
+/// concat_with_tf). Materialized rather than inlined, sidestepping the
+/// DuckDB UNION-ALL pushdown regression.
 pub fn materialize_blocked_pairs(
     session: &Session,
     settings: &Settings,
@@ -117,8 +117,7 @@ pub fn materialize_blocked_pairs_chunk(
 /// table (UNNEST the concat, self-join, apply the dedupe where-clause and the
 /// "AND NOT preceding" exclusion), then UNION ALL all arms into
 /// `__splink__blocked_id_pairs_non_unique` and collapse to unique pairs by
-/// `min(match_key)`. Mirrors Splink's `block_using_rules_sqls` +
-/// `materialise_exploded_id_tables`. `right_chunk` filters both the scalar arms
+/// `min(match_key)`. `right_chunk` filters both the scalar arms
 /// and the marginal self-joins on the right record's hash; since a pair's right
 /// record is fixed (`uid_l < uid_r`), both arms land in the same chunk, so the
 /// per-chunk `min(match_key)` dedup stays correct.

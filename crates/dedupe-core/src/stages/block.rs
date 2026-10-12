@@ -30,7 +30,7 @@ fn where_condition(uid: &UidExpr, link_type: LinkType, source_dataset_col: &str)
 /// record, so partitioning on it assigns each pair to exactly one chunk —
 /// unioning all chunks reproduces the full result with no duplicates. `None`
 /// or `n <= 1` yields no filter (byte-identical to the unchunked path).
-/// DuckDB's `hash()` is unsigned, so plain `%` matches Splink's DuckDB dialect.
+/// DuckDB's `hash()` is unsigned, so plain `%` needs no sign handling.
 fn right_chunk_filter(uid: &UidExpr, chunk: Option<(u32, u32)>) -> String {
     match chunk {
         Some((i, n)) if n > 1 => format!("\nand (hash({}) % {n}) = {i}", uid.render("r")),
@@ -43,7 +43,7 @@ fn exclude_preceding_sql(rule: &BlockingRule, preceding: &[&BlockingRule]) -> St
     if preceding.is_empty() {
         return String::new();
     }
-    // Splink: a *scalar* preceding rule excludes its own pairs via
+    // A *scalar* preceding rule excludes its own pairs via
     // `coalesce((<sql>),false)`; an *exploding* preceding rule contributes the
     // literal `false` (its pairs live in a separate marginal table and are
     // deduplicated downstream by `min(match_key)`, not by this predicate).
@@ -116,7 +116,7 @@ pub fn blocked_id_pairs_sql(
     marginals: &[(usize, String)],
     right_chunk: Option<(u32, u32)>,
 ) -> String {
-    // No rules -> cartesian product via a literal 1=1 rule (Splink's fallback).
+    // No rules -> cartesian product via a literal 1=1 rule.
     let fallback;
     let rules: &[BlockingRule] = if rules.is_empty() {
         fallback = [BlockingRule {
@@ -177,7 +177,7 @@ pub fn marginal_exploded_table_name(match_key: usize) -> String {
 }
 
 /// Collapse `__splink__blocked_id_pairs_non_unique` to unique pairs, keeping
-/// the smallest `match_key` per pair (lexical string min, matching Splink —
+/// the smallest `match_key` per pair (lexical string min —
 /// `match_key` is a string literal, never cast to int).
 pub fn dedup_non_unique_sql(non_unique_table: &str) -> String {
     format!(
@@ -218,7 +218,7 @@ pub fn explode_arrays_sql(
 /// Columns the UNNEST'd concat must carry for an exploding rule: the unique id
 /// (and source dataset, if any), plus every base column referenced by the rule
 /// and all preceding rules, dedup-preserving-order, minus the array columns
-/// being exploded. Mirrors Splink's `_columns_needed_for_blocking`.
+/// being exploded.
 pub fn blocking_retain_columns(
     preceding: &[&BlockingRule],
     rule: &BlockingRule,

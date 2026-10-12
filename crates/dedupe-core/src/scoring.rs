@@ -1,10 +1,10 @@
-//! Pure Fellegi-Sunter scoring math, log2-native per Splink 5.
+//! Pure Fellegi-Sunter scoring math, log2-native.
 
 use crate::comparison::{Comparison, ComparisonLevel, M_U_CLAMP_MIN};
 use crate::error::{DedupeError, Result};
 
 /// Per-level match weight: `log2(max(m, 1e-300) / max(u, 1e-300))`
-/// (Splink 5 `ComparisonLevel._match_weight`; null levels contribute 0.0).
+/// (null levels contribute 0.0).
 pub fn match_weight(m: f64, u: f64) -> f64 {
     (m.max(M_U_CLAMP_MIN) / u.max(M_U_CLAMP_MIN)).log2()
 }
@@ -27,8 +27,8 @@ pub fn match_weight_to_prob(w: f64) -> f64 {
     }
 }
 
-/// Resolve a level's (m, u), falling back to Splink's per-position defaults
-/// when unset (matching the `m_probability`/`u_probability` getters).
+/// Resolve a level's (m, u), falling back to the per-position defaults
+/// when unset.
 pub fn level_m_u(_c: &Comparison, level: &ComparisonLevel) -> Result<(f64, f64)> {
     Ok((
         level.m.resolve(level.default_m),
@@ -36,7 +36,7 @@ pub fn level_m_u(_c: &Comparison, level: &ComparisonLevel) -> Result<(f64, f64)>
     ))
 }
 
-/// Splink's `_u_probability_corresponding_to_exact_match`: the u probability
+/// The exact-match-level u probability: the u probability
 /// the TF adjustment scales against. With `disable_tf_exact_match_detection`
 /// it is the level's own u; otherwise the u of the sibling level that is an
 /// exact match on exactly the TF column.

@@ -25,7 +25,7 @@ fn quote_ident_list(cols: &[String]) -> String {
 
 #[derive(Debug, Clone)]
 pub struct TableHandle {
-    /// Splink-style templated name, e.g. `__splink__df_concat`.
+    /// Templated pipeline name, e.g. `__splink__df_concat`.
     pub templated: String,
     /// Actual table/view name in the database.
     pub physical: String,
@@ -49,14 +49,14 @@ pub struct TableHandle {
 ///   DuckDB drop row-order bookkeeping, cutting peak memory on large scans/joins
 ///   (safe here — every stage is explicitly ordered when order matters).
 ///
-/// Use [`SessionOptions::parity`] for deterministic single-thread runs (what
-/// the golden parity tests use) and [`SessionOptions::performance`] for a
+/// Use [`SessionOptions::deterministic`] for deterministic single-thread runs
+/// (what the golden regression tests use) and [`SessionOptions::performance`] for a
 /// throughput-oriented production default.
 #[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
     /// Worker threads per query. `None` = DuckDB default (all logical cores).
-    /// Parity tests pin `Some(1)` so float aggregation order matches the
-    /// golden-generation runs.
+    /// Golden tests pin `Some(1)` so float aggregation order matches the
+    /// golden baselines.
     pub threads: Option<u32>,
     /// In-memory buffer cap, e.g. `"8GB"` / `"75%"`. `None` = DuckDB default
     /// (~80% of RAM). Beyond it DuckDB spills to `temp_directory`.
@@ -86,11 +86,11 @@ pub struct SessionOptions {
 }
 
 impl SessionOptions {
-    /// Deterministic single-thread configuration used by the golden parity
+    /// Deterministic single-thread configuration used by the golden regression
     /// tests: `threads = 1` keeps floating-point aggregation order stable so
-    /// results match the Python/DuckDB golden-generation runs byte-for-byte.
+    /// results match the golden baselines byte-for-byte.
     #[must_use]
-    pub fn parity() -> Self {
+    pub fn deterministic() -> Self {
         Self {
             threads: Some(1),
             ..Self::default()
@@ -593,8 +593,7 @@ impl Session {
     }
 
     /// Register a CSV file as a temp table. `column_types` (name -> DuckDB
-    /// type) pins the schema; pass the pandas-equivalent types for parity
-    /// with Splink's tutorial ingestion.
+    /// type) pins the schema.
     pub fn register_csv(
         &self,
         path: &Path,
@@ -605,8 +604,8 @@ impl Session {
         let path_str = path.to_string_lossy().replace('\'', "''");
         let sql = if column_types.is_empty() {
             // Keep dates/times as strings (DATE/TIME excluded from inference),
-            // matching how Splink ingests CSVs via pandas/pyarrow — otherwise a
-            // `dob` auto-typed as DATE breaks string comparisons like
+            // matching the string-typed ingestion the golden datasets expect —
+            // otherwise a `dob` auto-typed as DATE breaks string comparisons like
             // `levenshtein(dob_l, dob_r)`.
             format!(
                 "CREATE TEMP TABLE {physical} AS SELECT * FROM read_csv('{path_str}', \

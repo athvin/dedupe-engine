@@ -1,6 +1,6 @@
-//! Incremental-linkage parity gate: predict_between (new batch vs existing)
-//! and predict_within (within the new batch) must match Splink's
-//! `predict_between` / `predict_within` on the same split of fake_1000.
+//! Incremental-linkage golden gate: predict_between (new batch vs existing)
+//! and predict_within (within the new batch) must match the committed goldens
+//! on the same split of fake_1000.
 
 mod common;
 
@@ -38,7 +38,7 @@ const GAMMA_COLS: &[&str] = &[
 
 #[test]
 fn predict_between_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
 
     let existing_input = register_parquet(&session, "incremental_existing.parquet", "existing");
@@ -70,7 +70,7 @@ fn predict_between_matches_golden() {
 
 #[test]
 fn predict_within_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let settings = Settings::from_json_str(&load_golden_text("model_final.json")).unwrap();
 
     let existing_input = register_parquet(&session, "incremental_existing.parquet", "existing");

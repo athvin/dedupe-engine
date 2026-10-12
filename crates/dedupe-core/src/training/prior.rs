@@ -14,8 +14,7 @@ use crate::sql::pipeline::CtePipeline;
 use crate::stages::block::blocked_id_pairs_sql;
 use crate::stages::uid_expr_for;
 
-/// Total possible comparisons (the cartesian count) by link type, matching
-/// Splink's `calculate_cartesian`:
+/// Total possible comparisons (the cartesian count) by link type:
 /// - dedupe_only / link_and_dedupe: `N*(N-1)/2` over the concat
 /// - link_only: `((Σnᵢ)² − Σnᵢ²)/2` over per-dataset counts
 pub fn total_possible_comparisons(

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Fellegi-Sunter record linkage engine (Splink 5 port) targeting DuckLake"
+description = "Fellegi-Sunter record linkage engine targeting DuckLake"
 
 [lints]
 workspace = true

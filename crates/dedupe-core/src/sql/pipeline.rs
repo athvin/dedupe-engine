@@ -1,5 +1,4 @@
-//! CTE pipeline assembler — the Rust equivalent of Splink's
-//! `internals/pipeline.py`. Queued `(sql, output_name)` tasks are assembled
+//! CTE pipeline assembler. Queued `(sql, output_name)` tasks are assembled
 //! into one `WITH ... <final select>` query; references to input tables'
 //! templated names are rewritten to their physical names (longest name first,
 //! identifier-boundary aware). References to earlier CTE outputs keep their

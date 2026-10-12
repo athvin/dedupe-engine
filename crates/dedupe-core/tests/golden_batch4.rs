@@ -1,5 +1,5 @@
-//! Batch-4 parity: completeness, column value frequencies, and m-from-labels
-//! (column + pairwise table) — vs Splink goldens.
+//! Batch-4 golden gates: completeness, column value frequencies, and
+//! m-from-labels (column + pairwise table) — vs the committed goldens.
 
 mod common;
 
@@ -19,7 +19,7 @@ use dedupe_core::training::m_from_labels::{
 const PROF_COLS: &[&str] = &["first_name", "surname", "dob", "city", "email"];
 
 fn setup() -> (Session, Settings, TableHandle) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -114,7 +114,7 @@ fn assert_m_matches(model: &TrainedModel, golden_name: &str) {
 
 #[test]
 fn m_from_label_column_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
@@ -128,7 +128,7 @@ fn m_from_label_column_matches_golden() {
 
 #[test]
 fn m_from_pairwise_labels_matches_golden() {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();

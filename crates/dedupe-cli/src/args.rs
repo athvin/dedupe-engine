@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 
-/// dedupe: a Rust record-linkage engine (Splink 5.0.0 parity) on DuckLake.
+/// dedupe: a probabilistic record-linkage engine on DuckLake.
 #[derive(Parser, Debug)]
 #[command(name = "dedupe", version, about)]
 pub struct Cli {
@@ -121,7 +121,7 @@ impl InputSource {
 
 #[derive(Args, Debug)]
 pub struct TrainArgs {
-    /// Settings JSON (Splink-compatible).
+    /// Settings JSON.
     #[arg(long)]
     pub settings: String,
     #[command(flatten)]

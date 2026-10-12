@@ -1,5 +1,5 @@
-//! Incremental linkage — the Rust equivalents of Splink 5's `predict_between`
-//! and `predict_within`, scoped to dedupe.
+//! Incremental linkage — `predict_between` and `predict_within`, scoped to
+//! dedupe.
 //!
 //! The use case: a model has been trained on an existing dataset, and a new
 //! batch of records arrives. Rather than re-running the whole pipeline over
@@ -102,7 +102,7 @@ pub fn predict_between(
 }
 
 /// Score the full cartesian product of two record collections with no
-/// blocking (Splink's `score_pairs`): every left record against every right
+/// blocking (`score_pairs`): every left record against every right
 /// record, scored with the model and the established TF tables. Realtime /
 /// ad-hoc pair scoring.
 pub fn score_pairs(

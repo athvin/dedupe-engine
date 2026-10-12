@@ -1,6 +1,6 @@
-//! M6 parity gate: connected-components clustering must reproduce Splink's
-//! cluster membership exactly — first from the golden predictions (isolating
-//! clustering), then end-to-end from our own predictions.
+//! Clustering golden gate: connected-components clustering must reproduce
+//! the golden cluster membership exactly — first from the golden predictions
+//! (isolating clustering), then end-to-end from our own predictions.
 
 mod common;
 
@@ -16,7 +16,7 @@ use dedupe_core::session::{Session, SessionOptions, TableHandle};
 const THRESHOLD: f64 = 0.95;
 
 fn setup() -> (Session, Settings, TableHandle) {
-    let session = Session::open_in_memory(SessionOptions::parity()).unwrap();
+    let session = Session::open_in_memory(SessionOptions::deterministic()).unwrap();
     let input = session
         .register_csv(&fake_1000_csv_path(), "fake_1000", FAKE_1000_SCHEMA)
         .unwrap();
