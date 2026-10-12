@@ -23,6 +23,11 @@ The full core linkage pipeline, matching Splink's canonical workflow:
 4. **`predict()`** — pairwise match weights/probabilities with term-frequency
    adjustments, scored additively in log2 space (`mw_` columns).
 5. **Clustering** — connected components (min-representative propagation).
+6. **Incremental linkage** — match a new batch of records against an existing
+   dataset without re-running the whole pipeline. Mirrors Splink 5's
+   `predict_between` (new × existing, cross pairs only) and `predict_within`
+   (within the new batch), scoring with the trained model and term
+   frequencies from the established data.
 
 Out of scope for v1: charts, exploratory profiling, blocking analysis, link
 (non-dedupe) types, exploding blocking rules.
@@ -59,6 +64,13 @@ dedupe predict --model model.json --catalog catalog.ducklake --data-path ./data 
 
 dedupe cluster --model model.json --catalog catalog.ducklake --data-path ./data \
   --input people --predictions predictions --threshold 0.95 --output clusters
+
+# Incremental: match a new batch against the existing dataset (and within
+# itself), using the trained model and the established data's term frequencies.
+dedupe link-new --model model.json \
+  --catalog catalog.ducklake --data-path ./data \
+  --input people --new-input new_arrivals \
+  --scope both --output incremental_predictions
 ```
 
 `--input-csv` / `--input-parquet` and `--output-parquet` bypass the lake for

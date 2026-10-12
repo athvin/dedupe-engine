@@ -1,6 +1,6 @@
 -- templated: __splink__df_tf_email
--- physical: __splink__df_tf_email_abfc8347c
-CREATE TABLE __splink__df_tf_email_abfc8347c AS
+-- physical: __splink__df_tf_email_c87f87c88
+CREATE TABLE __splink__df_tf_email_c87f87c88 AS
 WITH
 
 __splink__df_concat as (

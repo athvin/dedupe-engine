@@ -49,6 +49,10 @@ DETERMINISTIC_RULES = [
 EM_RULE_1 = block_on("first_name", "surname")
 EM_RULE_2 = block_on("dob")
 
+# Incremental linkage: records with unique_id < this are the "existing" set,
+# the rest are a "new" batch to be matched against (and within).
+INCREMENTAL_SPLIT = 900
+
 
 def new_db_api(
     sql_log: list | None = None, capture: dict | None = None
@@ -228,6 +232,47 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def gen_incremental_goldens() -> None:
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    existing = df[df.unique_id < INCREMENTAL_SPLIT].copy()
+    new = df[df.unique_id >= INCREMENTAL_SPLIT].copy()
+
+    # Export the exact input splits so the Rust parity test reads identical data.
+    e_sdf = db_api.register(existing, dataset_display_name="existing")
+    n_sdf = db_api.register(new, dataset_display_name="new")
+    con.execute(
+        f"COPY (SELECT * FROM {e_sdf.physical_name} ORDER BY unique_id) "
+        f"TO '{OUT / 'incremental_existing.parquet'}' (FORMAT PARQUET)"
+    )
+    con.execute(
+        f"COPY (SELECT * FROM {n_sdf.physical_name} ORDER BY unique_id) "
+        f"TO '{OUT / 'incremental_new.parquet'}' (FORMAT PARQUET)"
+    )
+
+    # Trained model, with term frequencies computed from the existing data.
+    settings = json.loads((OUT / "model_final.json").read_text())
+    linker = Linker(e_sdf, settings)
+    for col in ["first_name", "surname", "city", "email"]:
+        linker.table_management.compute_tf_table(col)
+
+    between = linker.inference.predict_between(e_sdf, n_sdf, warning_mode="never")
+    export_table(
+        con,
+        between.physical_name,
+        OUT / "incremental_between.parquet",
+        "unique_id_l, unique_id_r, match_key",
+    )
+
+    within = linker.inference.predict_within(n_sdf, warning_mode="never")
+    export_table(
+        con,
+        within.physical_name,
+        OUT / "incremental_within.parquet",
+        "unique_id_l, unique_id_r, match_key",
+    )
+
+
 def main() -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -347,6 +392,13 @@ def main() -> None:
     if not (OUT / "u_sample_ids.parquet").exists():
         print("WARNING: u_sample_ids.parquet was not captured")
     write_sql_log(sql_log_b, "u_sampled")
+
+    # ------------------------------------------------------------------
+    # Incremental linkage: match a new batch against the existing records
+    # (predict_between) and within the new batch (predict_within), using a
+    # trained model and term frequencies computed from the existing data.
+    # ------------------------------------------------------------------
+    gen_incremental_goldens()
 
     # ------------------------------------------------------------------
     # Manifest.

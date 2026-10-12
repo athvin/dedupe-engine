@@ -3,9 +3,13 @@ mod args;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use args::{Cli, ClusterArgs, Command, InputSource, PredictArgs, TrainArgs};
+use args::{
+    Cli, ClusterArgs, Command, InputSource, LinkNewArgs, LinkNewScope, PredictArgs, TrainArgs,
+};
 use clap::Parser;
+use dedupe_core::incremental::{predict_between, predict_within};
 use dedupe_core::linker::{Linker, TrainConfig};
+use dedupe_core::predict;
 use dedupe_core::session::TableHandle;
 use dedupe_core::{DuckLakeConfig, Session, SessionOptions, Settings};
 
@@ -21,6 +25,7 @@ fn run() -> Result<()> {
         Command::Train(a) => train(a),
         Command::Predict(a) => predict(a),
         Command::Cluster(a) => cluster(a),
+        Command::LinkNew(a) => link_new(a),
     }
 }
 
@@ -147,6 +152,104 @@ fn cluster(a: ClusterArgs) -> Result<()> {
     }
     println!("{n}");
     Ok(())
+}
+
+fn link_new(a: LinkNewArgs) -> Result<()> {
+    let settings = Settings::from_json_file(Path::new(&a.model)).context("loading model JSON")?;
+    let session = open_session(&a.source)?;
+
+    // Existing records come from the standard --input/--input-csv/--input-parquet.
+    let existing_input = register_input(&session, &a.source, "existing_input")?;
+    // New batch comes from --new-input / --new-input-csv / --new-input-parquet.
+    let new_input = register_new_input(&session, &a)?;
+
+    let existing_concat = predict::materialize_concat(&session, &existing_input)?;
+    let new_concat = predict::materialize_concat(&session, &new_input)?;
+    // Term frequencies reflect the established (existing) data.
+    let tf_tables = predict::materialize_tf_tables(&session, &settings, &existing_concat)?;
+
+    let threshold_mw = a.threshold_match_probability.and_then(|p| {
+        if p <= 0.0 {
+            None
+        } else {
+            Some((p / (1.0 - p)).log2())
+        }
+    });
+
+    let mut parts: Vec<TableHandle> = Vec::new();
+    if matches!(a.scope, LinkNewScope::Between | LinkNewScope::Both) {
+        parts.push(predict_between(
+            &session,
+            &settings,
+            &existing_concat,
+            &new_concat,
+            &tf_tables,
+            threshold_mw,
+        )?);
+    }
+    if matches!(a.scope, LinkNewScope::Within | LinkNewScope::Both) {
+        parts.push(predict_within(
+            &session,
+            &settings,
+            &new_concat,
+            &tf_tables,
+            threshold_mw,
+        )?);
+    }
+
+    let result = union_tables(&session, &parts)?;
+    let n = session.count(&result.physical)?;
+
+    if let Some(path) = &a.output_parquet {
+        write_parquet(&session, &result, path)?;
+    }
+    if a.source.catalog.is_some() {
+        session.write_to_lake(&result, &a.output)?;
+        eprintln!(
+            "wrote {n} incremental predictions to lake table `{}`",
+            a.output
+        );
+    } else if a.output_parquet.is_none() {
+        bail!("no output target: provide --catalog (lake) or --output-parquet");
+    }
+    println!("{n}");
+    Ok(())
+}
+
+/// Register the new-batch input for `link-new`.
+fn register_new_input(session: &Session, a: &LinkNewArgs) -> Result<TableHandle> {
+    if let Some(csv) = &a.new_input_csv {
+        return Ok(session.register_csv(Path::new(csv), "new_input", &[])?);
+    }
+    if let Some(parquet) = &a.new_input_parquet {
+        let p = parquet.replace('\'', "''");
+        return Ok(session.register_table(&format!("read_parquet('{p}')"), "new_input")?);
+    }
+    if let Some(table) = &a.new_input {
+        return Ok(session.register_lake_table(table, "new_input")?);
+    }
+    bail!(
+        "no new batch specified: use --new-input (lake), --new-input-csv, or --new-input-parquet"
+    );
+}
+
+/// UNION ALL a set of prediction tables into one temp table.
+fn union_tables(session: &Session, parts: &[TableHandle]) -> Result<TableHandle> {
+    if parts.len() == 1 {
+        return Ok(parts[0].clone());
+    }
+    let physical = format!("__splink__df_incremental_{}", std::process::id());
+    let union = parts
+        .iter()
+        .map(|t| format!("SELECT * FROM {}", t.physical))
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
+    session.execute_batch(&format!("CREATE TEMP TABLE {physical} AS {union}"))?;
+    Ok(TableHandle {
+        templated: "__splink__df_incremental".to_string(),
+        physical,
+        columns: parts[0].columns.clone(),
+    })
 }
 
 fn write_parquet(session: &Session, table: &TableHandle, path: &str) -> Result<()> {

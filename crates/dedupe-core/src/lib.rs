@@ -10,6 +10,7 @@ pub mod blocking;
 pub mod clustering;
 pub mod comparison;
 pub mod error;
+pub mod incremental;
 pub mod linker;
 pub mod model;
 pub mod predict;

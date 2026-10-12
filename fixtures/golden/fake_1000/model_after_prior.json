@@ -5,7 +5,7 @@
     "retain_intermediate_calculation_columns": true,
     "additional_columns_to_retain": [],
     "sql_dialect": "duckdb",
-    "linker_uid": "jf9w1p5q",
+    "linker_uid": "kis47wio",
     "em_convergence": 0.0001,
     "max_iterations": 25,
     "match_weight_column_prefix": "mw_",

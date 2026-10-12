@@ -61,9 +61,27 @@ fn columns_to_select_for_blocking(settings: &Settings) -> Vec<String> {
 }
 
 pub fn blocked_with_cols_sql(settings: &Settings, uid: &UidExpr) -> String {
+    blocked_with_cols_sql_tables(
+        settings,
+        uid,
+        BLOCKED_ID_PAIRS,
+        DF_CONCAT_WITH_TF,
+        DF_CONCAT_WITH_TF,
+    )
+}
+
+/// As `blocked_with_cols_sql`, but with explicit blocked-pairs and left/right
+/// source tables (incremental linkage uses separate left/right concats).
+pub fn blocked_with_cols_sql_tables(
+    settings: &Settings,
+    uid: &UidExpr,
+    blocked: &str,
+    left_table: &str,
+    right_table: &str,
+) -> String {
     let cols = columns_to_select_for_blocking(settings).join(",\n    ");
     format!(
-        "select\n    {cols},\n    b.match_key\nfrom {BLOCKED_ID_PAIRS} as b\ninner join {DF_CONCAT_WITH_TF} as l\non {uid_l} = b.join_key_l\ninner join {DF_CONCAT_WITH_TF} as r\non {uid_r} = b.join_key_r",
+        "select\n    {cols},\n    b.match_key\nfrom {blocked} as b\ninner join {left_table} as l\non {uid_l} = b.join_key_l\ninner join {right_table} as r\non {uid_r} = b.join_key_r",
         uid_l = uid.render("l"),
         uid_r = uid.render("r"),
     )

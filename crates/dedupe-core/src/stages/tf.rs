@@ -24,8 +24,15 @@ pub fn tf_table_sql(column: &str, tf_prefix: &str) -> String {
 /// TF table onto the concat on the raw column. With no TF columns this
 /// degenerates to `select * from __splink__df_concat`.
 pub fn concat_with_tf_sql(tf_columns: &[String], tf_prefix: &str) -> String {
+    concat_with_tf_sql_from(DF_CONCAT, tf_columns, tf_prefix)
+}
+
+/// As `concat_with_tf_sql`, but joining TF tables onto an arbitrary source
+/// table (used by incremental linkage, where the left and right sides are
+/// separate concats sharing the established TF tables).
+pub fn concat_with_tf_sql_from(source: &str, tf_columns: &[String], tf_prefix: &str) -> String {
     if tf_columns.is_empty() {
-        return format!("select * from {DF_CONCAT}");
+        return format!("select * from {source}");
     }
     let select_tf = tf_columns
         .iter()
@@ -36,9 +43,9 @@ pub fn concat_with_tf_sql(tf_columns: &[String], tf_prefix: &str) -> String {
         .iter()
         .map(|c| {
             let tf_tbl = tf_table_name(c);
-            format!("left join {tf_tbl} on {DF_CONCAT}.\"{c}\" = {tf_tbl}.\"{c}\"")
+            format!("left join {tf_tbl} on {source}.\"{c}\" = {tf_tbl}.\"{c}\"")
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("select\n    {DF_CONCAT}.*,\n    {select_tf}\nfrom {DF_CONCAT}\n{joins}")
+    format!("select\n    {source}.*,\n    {select_tf}\nfrom {source}\n{joins}")
 }

@@ -16,6 +16,9 @@ pub enum Command {
     Predict(PredictArgs),
     /// Cluster predictions into entities via connected components.
     Cluster(ClusterArgs),
+    /// Incrementally match a new batch of records against an existing dataset
+    /// (and within the new batch), using a trained model.
+    LinkNew(LinkNewArgs),
 }
 
 /// How to locate the input records.
@@ -85,6 +88,48 @@ pub struct PredictArgs {
     /// Also write output to this Parquet file (when not using a lake).
     #[arg(long)]
     pub output_parquet: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct LinkNewArgs {
+    /// Trained model JSON.
+    #[arg(long)]
+    pub model: String,
+    /// How to reach the existing dataset + (via its lake/files) the catalog.
+    /// `--input` names the existing table; the new batch is given separately.
+    #[command(flatten)]
+    pub source: InputSource,
+    /// New-batch records as a lake table name.
+    #[arg(long)]
+    pub new_input: Option<String>,
+    /// New-batch records as a CSV file.
+    #[arg(long)]
+    pub new_input_csv: Option<String>,
+    /// New-batch records as a Parquet file.
+    #[arg(long)]
+    pub new_input_parquet: Option<String>,
+    /// What to score: new-vs-existing, within-new, or both (default).
+    #[arg(long, value_enum, default_value_t = LinkNewScope::Both)]
+    pub scope: LinkNewScope,
+    /// Optional match-probability threshold filter.
+    #[arg(long)]
+    pub threshold_match_probability: Option<f64>,
+    /// Output table name written to the lake.
+    #[arg(long, default_value = "incremental_predictions")]
+    pub output: String,
+    /// Also write output to this Parquet file (when not using a lake).
+    #[arg(long)]
+    pub output_parquet: Option<String>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq)]
+pub enum LinkNewScope {
+    /// Pairs between the new batch and the existing dataset.
+    Between,
+    /// Pairs within the new batch.
+    Within,
+    /// Both, unioned (full incremental dedupe of the new batch).
+    Both,
 }
 
 #[derive(Args, Debug)]

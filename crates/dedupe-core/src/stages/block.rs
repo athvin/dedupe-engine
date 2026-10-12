@@ -36,6 +36,46 @@ fn exclude_preceding_sql(rule: &BlockingRule, preceding: &[&BlockingRule]) -> St
     format!("\nAND NOT ({})", clauses.join(" OR "))
 }
 
+/// Cross-table blocked id pairs (`two_dataset_link_only` semantics): inner
+/// join left x right on each rule with `where 1=1` (no `uid_l < uid_r`), the
+/// same string `match_key` and "AND NOT preceding" dedup. Used by
+/// incremental linkage (predict_between), where left and right are disjoint
+/// record collections.
+pub fn blocked_id_pairs_cross_sql(
+    rules: &[BlockingRule],
+    uid: &UidExpr,
+    left_table: &str,
+    right_table: &str,
+) -> String {
+    let fallback;
+    let rules: &[BlockingRule] = if rules.is_empty() {
+        fallback = [BlockingRule {
+            index: 0,
+            sql: "1=1".to_string(),
+        }];
+        &fallback
+    } else {
+        rules
+    };
+
+    let arms: Vec<String> = rules
+        .iter()
+        .enumerate()
+        .map(|(i, rule)| {
+            let preceding: Vec<&BlockingRule> = rules[..i].iter().collect();
+            format!(
+                "select\n'{match_key}' as match_key,\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {left_table} as l\ninner join {right_table} as r\non\n({rule_sql})\nwhere 1=1{exclude}",
+                match_key = rule.index,
+                uid_l = uid.render("l"),
+                uid_r = uid.render("r"),
+                rule_sql = rule.sql,
+                exclude = exclude_preceding_sql(rule, &preceding),
+            )
+        })
+        .collect();
+    arms.join("\n\nUNION ALL\n\n")
+}
+
 pub fn blocked_id_pairs_sql(
     rules: &[BlockingRule],
     uid: &UidExpr,
