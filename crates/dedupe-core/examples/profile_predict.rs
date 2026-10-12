@@ -91,9 +91,20 @@ fn main() {
     let threads: Option<u32> = args.next().and_then(|s| s.parse().ok());
     let iters: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
 
-    let opts = match threads {
+    // Optional memory knobs via env, for stress-testing stability:
+    //   DEDUPE_MEMORY_LIMIT=300MB   cap the buffer pool (forces spilling)
+    //   DEDUPE_PRESERVE_ORDER=false relax insertion order (DuckDB's OOM remedy)
+    let mut opts = match threads {
         Some(n) => SessionOptions::default().with_threads(n),
         None => SessionOptions::default(),
+    };
+    if let Ok(limit) = std::env::var("DEDUPE_MEMORY_LIMIT") {
+        opts = opts.with_memory_limit(limit);
+    }
+    opts.preserve_insertion_order = match std::env::var("DEDUPE_PRESERVE_ORDER").as_deref() {
+        Ok("false") => Some(false),
+        Ok("true") => Some(true),
+        _ => None,
     };
     let thread_label = threads.map_or_else(|| "all".to_string(), |n| n.to_string());
 

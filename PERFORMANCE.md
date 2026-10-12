@@ -58,21 +58,30 @@ cargo run --release --example profile_predict -- historical_50k 8
 
 ## Memory efficiency
 
-The levers, all on [`SessionOptions`] → DuckDB config:
+Stable, bounded memory is what lets you scale by adding CPUs (or pods): peak
+stays flat, throughput rises with cores. The levers:
 
-- **`memory_limit`** — hard cap on in-memory buffers. DuckDB stays under it by
-  spilling hash tables / sort runs to disk rather than OOM-ing.
-- **`temp_directory`** — where spilled intermediates go. Set it and a workload
-  **larger than RAM still completes** (streaming out-of-core execution).
-- **`preserve_insertion_order = false`** — drops the row-order bookkeeping
-  DuckDB otherwise keeps for large scans/joins, cutting peak memory. Safe here:
-  every stage that depends on order sorts explicitly.
-- **Explicit temp-table lifecycle** — intermediates are native temp tables with
-  run-scoped names, dropped as soon as a stage no longer needs them
-  (`drop_table`), so peak live set stays near one stage's working data.
+- **Automatic spill directory** — every `Session` that isn't given a
+  `temp_directory` creates its own unique one (and removes it on drop). An
+  in-memory DuckDB otherwise keeps everything resident; a dedicated per-process
+  dir means it can always evict to disk and no two processes ever share a spill
+  dir (a known corruption hazard in multi-pod setups).
+- **`memory_limit`** — hard cap on in-memory buffers; above it DuckDB spills
+  rather than OOM-ing.
+- **`preserve_insertion_order = false`** — drops row-order bookkeeping DuckDB
+  keeps for large scans/joins (its own first suggestion in an OOM message). The
+  CLI sets it automatically when running multi-threaded (already
+  non-deterministic in float-sum order); `--threads 1` keeps it on so
+  golden-exact reproduction is untouched. Value-safe either way — results are
+  compared order-independently.
+- **Explicit temp-table lifecycle** — `__splink__*` intermediates are native
+  temp tables dropped as soon as a stage is done (clustering, for instance,
+  drops per-iteration tables), so the live set stays near one stage's data.
+- **Chunked / streamed predict** (below) — bounds the scoring working set, and
+  with `--stream` the result too.
 
 `SessionOptions::performance(temp_dir)` bundles the throughput defaults (all
-cores, `preserve_insertion_order = false`, spilling enabled). The CLI exposes
+cores, `preserve_insertion_order = false`, explicit spill dir). The CLI exposes
 `--threads`, `--memory-limit`, and `--temp-dir`.
 
 ```rust
@@ -81,6 +90,25 @@ let session = Session::open_in_memory(
     SessionOptions::performance("/fast/scratch").with_memory_limit("16GB"),
 )?;
 ```
+
+### Measured: flat memory, cores add throughput
+
+Scoring the 64M-pair synthetic workload under a **fixed 200 MB** `memory_limit`
+(DuckDB spilling to disk), varying only the thread count:
+
+| threads | predict | vs 1 thread |
+|--------:|--------:|------------:|
+| 1 | 17.7 s | 1.00× |
+| 2 | 11.0 s | 1.61× |
+| 4 | 7.5 s | 2.37× |
+| 8 | 5.7 s | 3.10× |
+
+Memory stays capped at 200 MB throughout; adding cores just makes it finish
+sooner. That is the whole point — a pod with a fixed memory budget scores an
+arbitrarily large candidate set (spilling), and you buy speed with CPUs or more
+pods (each a `--num-chunks` hash range), not with more RAM. Below the point
+where the *result table* itself won't fit, switch on `--stream` so each pass
+lands in the lake instead of a temp table.
 
 ### Chunked predict (bounded-memory scoring)
 

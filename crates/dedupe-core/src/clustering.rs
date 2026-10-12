@@ -394,8 +394,10 @@ pub fn edge_bridges(
         truncated.physical
     ))?;
 
-    // Build the undirected graph over deduped unordered pairs (dropping
-    // self-loops), matching igraph's simple-graph semantics.
+    // Build the undirected simple graph (dropping self-loops), matching
+    // igraph's semantics. `UnGraphMap::add_edge` already treats (a,b) and (b,a)
+    // as one edge and is idempotent, so it deduplicates parallel edges on its
+    // own — no separate seen-set is needed (that would double the heap).
     let mut graph: UnGraphMap<&str, ()> = UnGraphMap::new();
     let unordered_key = |a: &str, b: &str| -> (String, String) {
         if a <= b {
@@ -404,16 +406,12 @@ pub fn edge_bridges(
             (b.to_string(), a.to_string())
         }
     };
-    let mut seen_pairs = std::collections::HashSet::new();
     for r in &rows {
         let (a, b) = (r[1].as_str(), r[2].as_str());
         if a == b {
             continue; // self-loop: never a bridge
         }
-        let key = unordered_key(a, b);
-        if seen_pairs.insert(key) {
-            graph.add_edge(a, b, ());
-        }
+        graph.add_edge(a, b, ());
     }
 
     // Collect bridge edges as unordered key set.

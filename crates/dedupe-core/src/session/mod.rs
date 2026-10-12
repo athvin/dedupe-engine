@@ -7,7 +7,7 @@
 pub mod ducklake;
 
 use std::cell::Cell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use duckdb::Connection;
 
@@ -124,6 +124,19 @@ pub struct Session {
     run_id: String,
     seq: Cell<u64>,
     lake: Option<LakeAttachment>,
+    /// A spill directory this session created (because the caller supplied
+    /// none) and is responsible for removing on drop.
+    owned_temp_dir: Option<PathBuf>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Best-effort: DuckDB removes its own spill files on connection close;
+        // this clears the dedicated directory we created for them.
+        if let Some(dir) = &self.owned_temp_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -140,17 +153,41 @@ pub struct Snapshot {
 }
 
 impl Session {
-    pub fn open_in_memory(opts: SessionOptions) -> Result<Session> {
+    pub fn open_in_memory(mut opts: SessionOptions) -> Result<Session> {
         let conn = Connection::open_in_memory()?;
-        Self::apply_options(&conn, &opts)?;
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
+        let run_id = format!("{nanos:08x}");
+
+        // An in-memory DuckDB keeps everything resident unless it has somewhere
+        // to spill. Give every session a dedicated spill directory when the
+        // caller didn't name one: this bounds peak memory (DuckDB evicts to
+        // disk under pressure) and guarantees no two sessions share a temp dir
+        // (a known corruption hazard, and a `Drop` race between sessions).
+        // Removed on drop. The pid + a process-wide counter make it unique even
+        // across sessions opened concurrently (e.g. parallel tests).
+        let owned_temp_dir = if opts.temp_directory.is_none() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SESSION_SEQ: AtomicU64 = AtomicU64::new(0);
+            let n = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("dedupe-spill-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| DedupeError::Other(format!("creating spill directory: {e}")))?;
+            opts.temp_directory = Some(dir.to_string_lossy().into_owned());
+            Some(dir)
+        } else {
+            None
+        };
+
+        Self::apply_options(&conn, &opts)?;
         Ok(Session {
             conn,
-            run_id: format!("{nanos:08x}"),
+            run_id,
             seq: Cell::new(0),
             lake: None,
+            owned_temp_dir,
         })
     }
 

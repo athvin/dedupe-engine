@@ -197,10 +197,23 @@ fn maintenance(a: MaintenanceArgs) -> Result<()> {
 
 /// Open a session, attaching a lake if the source references one.
 fn open_session(source: &InputSource) -> Result<Session> {
+    // Memory-stable production defaults: when running multi-threaded (the
+    // scaling case, already non-deterministic in float-sum order), relax
+    // insertion-order preservation — DuckDB's own OOM remedy — so large scans
+    // and writes spill cleanly. With `--threads 1` (single-thread determinism,
+    // e.g. golden reproduction) leave it at DuckDB's default so results stay
+    // bit-exact. The spill directory is auto-created by the session when
+    // `--temp-dir` is absent.
+    let preserve_insertion_order = if source.threads == Some(1) {
+        None
+    } else {
+        Some(false)
+    };
     let mut session = Session::open_in_memory(SessionOptions {
         threads: source.threads,
         memory_limit: source.memory_limit.clone(),
         temp_directory: source.temp_dir.clone(),
+        preserve_insertion_order,
         ..SessionOptions::default()
     })?;
     if let Some(catalog) = &source.catalog {
