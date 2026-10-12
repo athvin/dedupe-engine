@@ -4,11 +4,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use args::{
-    AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, InputSource, LinkNewArgs,
-    LinkNewScope, PredictArgs, TrainArgs,
+    AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, CountComparisonsArgs, InputSource,
+    LinkNewArgs, LinkNewScope, PredictArgs, TrainArgs,
 };
 use clap::Parser;
 use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
+use dedupe_core::blocking_analysis::count_comparisons_from_blocking_rules;
 use dedupe_core::clustering::{ClusterOptions, clustered_with_input_data, incremental_cluster};
 use dedupe_core::incremental::{predict_between, predict_within};
 use dedupe_core::linker::{Linker, TrainConfig};
@@ -31,6 +32,7 @@ fn run() -> Result<()> {
         Command::LinkNew(a) => link_new(a),
         Command::ClusterNew(a) => cluster_new(a),
         Command::Accuracy(a) => accuracy(a),
+        Command::CountComparisons(a) => count_comparisons(a),
     }
 }
 
@@ -356,6 +358,53 @@ fn union_tables(session: &Session, parts: &[TableHandle]) -> Result<TableHandle>
         physical,
         columns: parts[0].columns.clone(),
     })
+}
+
+fn count_comparisons(a: CountComparisonsArgs) -> Result<()> {
+    if a.blocking_rules.is_empty() {
+        bail!("count-comparisons requires at least one --blocking-rule");
+    }
+    let settings = Settings::from_json_file(Path::new(&a.settings)).context("loading settings")?;
+    let session = open_session(&a.source)?;
+    let inputs = resolve_inputs(&session, &a.source)?;
+    let refs: Vec<(&TableHandle, &str)> = inputs.iter().map(|(h, n)| (h, n.as_str())).collect();
+    let concat = predict::materialize_concat_multi(&session, &refs, &settings)?;
+
+    let counts =
+        count_comparisons_from_blocking_rules(&session, &settings, &concat, &a.blocking_rules)?;
+
+    for c in &counts {
+        eprintln!(
+            "rule {}: marginal={} cumulative={} / {} possible  [{}]",
+            c.match_key,
+            c.marginal_comparison_count,
+            c.cumulative_comparison_count,
+            c.total_possible_comparison_count,
+            c.blocking_rule,
+        );
+    }
+    // Machine-readable summary on stdout.
+    println!("{}", serde_json::to_string(&counts_to_json(&counts))?);
+    Ok(())
+}
+
+fn counts_to_json(
+    counts: &[dedupe_core::blocking_analysis::BlockingRuleCount],
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        counts
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "blocking_rule": c.blocking_rule,
+                    "match_key": c.match_key,
+                    "marginal_comparison_count": c.marginal_comparison_count,
+                    "cumulative_comparison_count": c.cumulative_comparison_count,
+                    "total_possible_comparison_count": c.total_possible_comparison_count,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn accuracy(a: AccuracyArgs) -> Result<()> {

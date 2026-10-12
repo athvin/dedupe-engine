@@ -25,6 +25,9 @@ pub enum Command {
     /// Evaluate model accuracy against a ground-truth label column (truth-space
     /// table: precision/recall/F-scores/ROC rates per threshold).
     Accuracy(AccuracyArgs),
+    /// Count how many comparisons each blocking rule generates (cumulatively)
+    /// vs the total possible — a pre-predict sanity check.
+    CountComparisons(CountComparisonsArgs),
 }
 
 /// How to locate the input records.
@@ -163,6 +166,18 @@ pub struct ClusterNewArgs {
     /// Also write output to this Parquet file (when not using a lake).
     #[arg(long)]
     pub output_parquet: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct CountComparisonsArgs {
+    /// Settings or model JSON (for link_type / unique id context).
+    #[arg(long)]
+    pub settings: String,
+    #[command(flatten)]
+    pub source: InputSource,
+    /// Blocking rule SQL to count (repeatable; counted cumulatively in order).
+    #[arg(long = "blocking-rule")]
+    pub blocking_rules: Vec<String>,
 }
 
 #[derive(Args, Debug)]

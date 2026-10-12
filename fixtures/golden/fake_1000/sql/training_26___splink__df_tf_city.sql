@@ -1,6 +1,6 @@
 -- templated: __splink__df_tf_city
--- physical: __splink__df_tf_city_f0977da86
-CREATE TABLE __splink__df_tf_city_f0977da86 AS
+-- physical: __splink__df_tf_city_ce3138ace
+CREATE TABLE __splink__df_tf_city_ce3138ace AS
 WITH
 
 __splink__df_concat as (

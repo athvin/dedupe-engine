@@ -303,6 +303,31 @@ def gen_link_goldens(link_type: str) -> None:
     )
 
 
+def gen_blocking_analysis_golden() -> None:
+    """Per-rule comparison counts for the model's blocking rules (exact, no
+    sampling), via Splink's count_comparisons_from_blocking_rules."""
+    from splink.blocking_analysis import count_comparisons_from_blocking_rules
+
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    sdf = db_api.register(df, dataset_display_name="fake_1000")
+    records = count_comparisons_from_blocking_rules(
+        sdf,
+        blocking_rules=[block_on("first_name", "city"), block_on("surname")],
+        link_type="dedupe_only",
+        record_sample_proportion=1.0,
+    )
+    keep = [
+        "blocking_rule",
+        "match_key",
+        "marginal_comparison_count",
+        "cumulative_comparison_count",
+        "total_possible_comparison_count",
+    ]
+    out = [{k: r[k] for k in keep} for r in records]
+    (OUT / "blocking_analysis.json").write_text(json.dumps(out, indent=2, default=str))
+
+
 def gen_accuracy_golden() -> None:
     """Truth-space table from the fake_1000 ground-truth `cluster` column,
     using the trained model (label-column accuracy path)."""
@@ -503,6 +528,7 @@ def main() -> None:
     # Accuracy evaluation from the ground-truth label column.
     # ------------------------------------------------------------------
     gen_accuracy_golden()
+    gen_blocking_analysis_golden()
 
     # ------------------------------------------------------------------
     # Manifest.

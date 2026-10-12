@@ -8,6 +8,7 @@
 
 pub mod accuracy;
 pub mod blocking;
+pub mod blocking_analysis;
 pub mod clustering;
 pub mod comparison;
 pub mod error;

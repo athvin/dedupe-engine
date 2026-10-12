@@ -1,6 +1,6 @@
 -- templated: __splink__df_concat_sample
--- physical: __splink__df_concat_sample_08519fc13
-CREATE TABLE __splink__df_concat_sample_08519fc13 AS
+-- physical: __splink__df_concat_sample_371ab7cfa
+CREATE TABLE __splink__df_concat_sample_371ab7cfa AS
 WITH
 
 __splink__df_concat as (
