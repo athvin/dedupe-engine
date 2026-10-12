@@ -42,6 +42,10 @@ impl Default for UOptions {
 }
 
 /// Number of rows whose cartesian product yields ~n_pairs pairs.
+// `f64::midpoint` is not bit-identical to `0.5 * (a + b)`; this expression must
+// match the reference sample-size arithmetic exactly, so the clippy suggestion
+// (manual_midpoint, pedantic) is refused rather than applied.
+#[allow(clippy::manual_midpoint)]
 fn rows_needed_for_n_pairs(n_pairs: f64) -> f64 {
     0.5 * ((8.0 * n_pairs + 1.0).sqrt() + 1.0)
 }

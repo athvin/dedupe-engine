@@ -121,6 +121,8 @@ fn sampled_record_set_matches_golden() {
     // compare the selected record set to the golden one.
     let proportion = {
         let total = session.count(&concat.physical).unwrap() as f64;
+        // Mirror estimate_u's arithmetic exactly (not f64::midpoint — see there).
+        #[allow(clippy::manual_midpoint)]
         let sample_size = 0.5 * ((8.0_f64 * 2e5 + 1.0).sqrt() + 1.0);
         (sample_size / total).min(1.0)
     };
