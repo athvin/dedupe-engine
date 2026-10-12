@@ -44,6 +44,13 @@ struct LakeAttachment {
     schema: String,
 }
 
+/// A DuckLake catalog snapshot (version + commit timestamp).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub version: i64,
+    pub timestamp: String,
+}
+
 impl Session {
     pub fn open_in_memory(opts: SessionOptions) -> Result<Session> {
         let conn = Connection::open_in_memory()?;
@@ -120,14 +127,66 @@ impl Session {
     }
 
     /// Write a table into the lake in its own transaction (one writable
-    /// catalog per transaction).
-    pub fn write_to_lake(&self, src: &TableHandle, target: &str) -> Result<()> {
+    /// catalog per transaction). Returns the snapshot version created by the
+    /// commit (DuckLake records one snapshot per transaction).
+    pub fn write_to_lake(&self, src: &TableHandle, target: &str) -> Result<i64> {
         let lake = self.lake()?;
         self.conn.execute_batch(&format!(
             "BEGIN; CREATE OR REPLACE TABLE {}.{}.{target} AS SELECT * FROM {}; COMMIT;",
             lake.alias, lake.schema, src.physical
         ))?;
-        Ok(())
+        self.latest_snapshot_version()
+    }
+
+    /// The most recent snapshot version in the attached lake.
+    pub fn latest_snapshot_version(&self) -> Result<i64> {
+        let lake = self.lake()?;
+        Ok(self.conn.query_row(
+            &format!(
+                "SELECT max(snapshot_id) FROM ducklake_snapshots('{}')",
+                lake.alias
+            ),
+            [],
+            |r| r.get::<_, i64>(0),
+        )?)
+    }
+
+    /// List all snapshots (version + ISO timestamp), newest last.
+    pub fn list_snapshots(&self) -> Result<Vec<Snapshot>> {
+        let lake = self.lake()?;
+        let rows = self.query_strings(&format!(
+            "SELECT snapshot_id, snapshot_time::VARCHAR FROM ducklake_snapshots('{}') ORDER BY snapshot_id",
+            lake.alias
+        ))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Snapshot {
+                version: r[0].parse().unwrap(),
+                timestamp: r[1].clone(),
+            })
+            .collect())
+    }
+
+    /// Register a lake table as it existed at a given snapshot version
+    /// (time-travel read), under a templated name via a temp view.
+    pub fn register_lake_table_at_version(
+        &self,
+        table: &str,
+        templated: &str,
+        version: i64,
+    ) -> Result<TableHandle> {
+        let lake = self.lake()?;
+        let physical = self.next_physical(templated);
+        self.conn.execute_batch(&format!(
+            "CREATE TEMP VIEW {physical} AS SELECT * FROM {}.{}.{table} AT (VERSION => {version})",
+            lake.alias, lake.schema
+        ))?;
+        let columns = self.table_columns(&physical)?;
+        Ok(TableHandle {
+            templated: templated.to_string(),
+            physical,
+            columns,
+        })
     }
 
     fn next_physical(&self, templated: &str) -> String {

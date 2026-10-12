@@ -28,6 +28,8 @@ pub enum Command {
     /// Count how many comparisons each blocking rule generates (cumulatively)
     /// vs the total possible — a pre-predict sanity check.
     CountComparisons(CountComparisonsArgs),
+    /// List the DuckLake catalog's snapshots (version + timestamp).
+    Snapshots(SnapshotsArgs),
 }
 
 /// How to locate the input records.
@@ -60,6 +62,9 @@ pub struct InputSource {
     /// each NAME becomes a source_dataset. When given, overrides --input.
     #[arg(long = "dataset")]
     pub datasets: Vec<String>,
+    /// Read lake inputs as of this snapshot version (DuckLake time travel).
+    #[arg(long)]
+    pub as_of_version: Option<i64>,
 }
 
 #[derive(Args, Debug)]
@@ -166,6 +171,12 @@ pub struct ClusterNewArgs {
     /// Also write output to this Parquet file (when not using a lake).
     #[arg(long)]
     pub output_parquet: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct SnapshotsArgs {
+    #[command(flatten)]
+    pub source: InputSource,
 }
 
 #[derive(Args, Debug)]

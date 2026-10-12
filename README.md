@@ -33,9 +33,20 @@ The full core linkage pipeline, matching Splink's canonical workflow:
    graph (contract existing clusters to super-nodes, run CC over just the new
    edges, expand). Splink has no such API, but the result is provably
    identical to a full re-cluster of the combined edge set.
+8. **Link types** — `link_only` and `link_and_dedupe` across multiple
+   datasets (composite `source_dataset`+`unique_id` keys), through the full
+   train/predict/cluster pipeline.
+9. **Accuracy evaluation** — a truth-space table from a ground-truth label
+   column: per-threshold confusion matrix and metrics (precision, recall,
+   F-scores, specificity, NPV, accuracy, φ, ROC rates). Data, not charts.
+10. **Blocking analysis** — per-rule comparison counts (marginal + cumulative)
+    vs the total possible, a pre-predict tractability check.
+11. **DuckLake snapshots / time-travel** — every lake write commits a snapshot;
+    list snapshots and read inputs as of any version (`--as-of-version`).
+    This is DuckLake-native and has no Splink equivalent.
 
-Out of scope for v1: charts, exploratory profiling, blocking analysis, link
-(non-dedupe) types, exploding blocking rules.
+Out of scope: charts/visualizations (this is a backend engine — metrics are
+emitted as data), exploratory column profiling, exploding/array blocking rules.
 
 ## Layout
 
@@ -82,6 +93,24 @@ dedupe cluster-new --model model.json \
   --catalog catalog.ducklake --data-path ./data \
   --input all_people --existing-clusters clusters \
   --predictions incremental_predictions --threshold 0.95 --output clusters
+
+# Link two datasets (link_only / link_and_dedupe).
+dedupe train --settings settings.json --catalog catalog.ducklake --data-path ./data \
+  --dataset people_a=table_a --dataset people_b=table_b \
+  --deterministic-rule '...' --em-rule '...' --output-model model.json
+
+# Evaluate accuracy against a ground-truth label column.
+dedupe accuracy --model model.json --input-csv people.csv \
+  --label-column true_entity --output-parquet truth_space.parquet
+
+# Check blocking-rule cardinality before predicting.
+dedupe count-comparisons --settings settings.json --input people \
+  --blocking-rule 'l."first_name" = r."first_name"' --catalog catalog.ducklake
+
+# DuckLake snapshots / time travel.
+dedupe snapshots --catalog catalog.ducklake --data-path ./data
+dedupe predict --model model.json --catalog catalog.ducklake --data-path ./data \
+  --input people --as-of-version 3 --output predictions
 ```
 
 `--input-csv` / `--input-parquet` and `--output-parquet` bypass the lake for

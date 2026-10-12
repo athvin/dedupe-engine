@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use args::{
     AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, CountComparisonsArgs, InputSource,
-    LinkNewArgs, LinkNewScope, PredictArgs, TrainArgs,
+    LinkNewArgs, LinkNewScope, PredictArgs, SnapshotsArgs, TrainArgs,
 };
 use clap::Parser;
 use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
@@ -33,7 +33,25 @@ fn run() -> Result<()> {
         Command::ClusterNew(a) => cluster_new(a),
         Command::Accuracy(a) => accuracy(a),
         Command::CountComparisons(a) => count_comparisons(a),
+        Command::Snapshots(a) => snapshots(a),
     }
+}
+
+fn snapshots(a: SnapshotsArgs) -> Result<()> {
+    if a.source.catalog.is_none() {
+        bail!("snapshots requires --catalog");
+    }
+    let session = open_session(&a.source)?;
+    let snaps = session.list_snapshots()?;
+    for s in &snaps {
+        eprintln!("version {} at {}", s.version, s.timestamp);
+    }
+    let json: Vec<_> = snaps
+        .iter()
+        .map(|s| serde_json::json!({"version": s.version, "timestamp": s.timestamp}))
+        .collect();
+    println!("{}", serde_json::to_string(&json)?);
+    Ok(())
 }
 
 /// Open a session, attaching a lake if the source references one.
@@ -65,20 +83,38 @@ fn register_input(session: &Session, source: &InputSource, templated: &str) -> R
         return Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?);
     }
     if let Some(table) = &source.input {
-        return Ok(session.register_lake_table(table, templated)?);
+        return register_lake(session, table, templated, source.as_of_version);
     }
     bail!("no input specified: use --input (lake), --input-csv, or --input-parquet");
 }
 
+/// Register a lake table, optionally as of a snapshot version (time travel).
+fn register_lake(
+    session: &Session,
+    table: &str,
+    templated: &str,
+    as_of_version: Option<i64>,
+) -> Result<TableHandle> {
+    match as_of_version {
+        Some(v) => Ok(session.register_lake_table_at_version(table, templated, v)?),
+        None => Ok(session.register_lake_table(table, templated)?),
+    }
+}
+
 /// Register a reference that is a lake table, a .parquet file, or a .csv file.
-fn register_ref(session: &Session, reference: &str, templated: &str) -> Result<TableHandle> {
+fn register_ref(
+    session: &Session,
+    reference: &str,
+    templated: &str,
+    as_of_version: Option<i64>,
+) -> Result<TableHandle> {
     if reference.ends_with(".parquet") {
         let p = reference.replace('\'', "''");
         Ok(session.register_table(&format!("read_parquet('{p}')"), templated)?)
     } else if reference.ends_with(".csv") {
         Ok(session.register_csv(Path::new(reference), templated, &[])?)
     } else {
-        Ok(session.register_lake_table(reference, templated)?)
+        register_lake(session, reference, templated, as_of_version)
     }
 }
 
@@ -97,7 +133,12 @@ fn resolve_inputs(session: &Session, source: &InputSource) -> Result<Vec<(TableH
         let (name, reference) = spec
             .split_once('=')
             .with_context(|| format!("--dataset must be NAME=REF, got `{spec}`"))?;
-        let handle = register_ref(session, reference, &format!("input_dataset_{i}"))?;
+        let handle = register_ref(
+            session,
+            reference,
+            &format!("input_dataset_{i}"),
+            source.as_of_version,
+        )?;
         out.push((handle, name.to_string()));
     }
     Ok(out)
