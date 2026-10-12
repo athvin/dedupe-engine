@@ -101,6 +101,35 @@ pub fn predict_between(
     Ok(out)
 }
 
+/// Score the full cartesian product of two record collections with no
+/// blocking (Splink's `score_pairs`): every left record against every right
+/// record, scored with the model and the established TF tables. Realtime /
+/// ad-hoc pair scoring.
+pub fn score_pairs(
+    session: &Session,
+    settings: &Settings,
+    left_concat: &TableHandle,
+    right_concat: &TableHandle,
+    tf_tables: &[TableHandle],
+    threshold_match_weight: Option<f64>,
+) -> Result<TableHandle> {
+    // A `1=1` cross block over left x right (no dedup, no source filter) is
+    // exactly the cartesian score; reuse predict_between with that one rule.
+    let mut s = settings.clone();
+    s.blocking_rules = vec![crate::blocking::BlockingRule {
+        index: 0,
+        sql: "1=1".to_string(),
+    }];
+    predict_between(
+        session,
+        &s,
+        left_concat,
+        right_concat,
+        tf_tables,
+        threshold_match_weight,
+    )
+}
+
 /// Score candidate pairs within a supplied collection (e.g. the new batch),
 /// using term frequencies from the established data. This is the ordinary
 /// predict pipeline over `concat` with externally supplied TF tables.

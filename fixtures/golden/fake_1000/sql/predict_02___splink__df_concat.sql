@@ -1,6 +1,6 @@
 -- templated: __splink__df_concat
--- physical: __splink__df_concat_dcd4f2f51
-CREATE TABLE __splink__df_concat_dcd4f2f51 AS
+-- physical: __splink__df_concat_5a22729d1
+CREATE TABLE __splink__df_concat_5a22729d1 AS
 
             select
     "unique_id",

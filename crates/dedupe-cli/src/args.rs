@@ -30,6 +30,9 @@ pub enum Command {
     CountComparisons(CountComparisonsArgs),
     /// List the DuckLake catalog's snapshots (version + timestamp).
     Snapshots(SnapshotsArgs),
+    /// Strict rule-based linkage: candidate pairs from blocking rules, no
+    /// probabilistic scoring.
+    DeterministicLink(DeterministicLinkArgs),
 }
 
 /// How to locate the input records.
@@ -177,6 +180,21 @@ pub struct ClusterNewArgs {
 pub struct SnapshotsArgs {
     #[command(flatten)]
     pub source: InputSource,
+}
+
+#[derive(Args, Debug)]
+pub struct DeterministicLinkArgs {
+    /// Settings or model JSON (blocking rules + id columns).
+    #[arg(long)]
+    pub settings: String,
+    #[command(flatten)]
+    pub source: InputSource,
+    /// Output table name written to the lake.
+    #[arg(long, default_value = "deterministic_pairs")]
+    pub output: String,
+    /// Also write output to this Parquet file (when not using a lake).
+    #[arg(long)]
+    pub output_parquet: Option<String>,
 }
 
 #[derive(Args, Debug)]

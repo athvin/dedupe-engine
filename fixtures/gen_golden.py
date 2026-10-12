@@ -303,6 +303,70 @@ def gen_link_goldens(link_type: str) -> None:
     )
 
 
+def gen_batch1_goldens() -> None:
+    """deterministic_link, score_pairs, model detailed records, n_largest_blocks."""
+    from splink.blocking_analysis import n_largest_blocks
+
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    sdf = db_api.register(df, dataset_display_name="fake_1000")
+    settings = json.loads((OUT / "model_final.json").read_text())
+    linker = Linker(sdf, settings)
+
+    # deterministic_link: blocked pairs from the model's blocking rules, no scoring.
+    det = linker.inference.deterministic_link()
+    export_table(
+        con,
+        det.physical_name,
+        OUT / "deterministic_link.parquet",
+        "unique_id_l, unique_id_r, match_key",
+    )
+
+    # model weights as data: per comparison level m/u/bayes_factor/log2_bayes_factor.
+    recs = linker._settings_obj._parameters_as_detailed_records
+    import dataclasses
+
+    out = []
+    for r in recs:
+        d = dataclasses.asdict(r) if dataclasses.is_dataclass(r) else dict(r)
+        out.append(d)
+    (OUT / "model_detailed_records.json").write_text(json.dumps(out, indent=2, default=str))
+
+    # score_pairs: cartesian scoring of two fixed record slices (no blocking).
+    for col in ["first_name", "surname", "city", "email"]:
+        linker.table_management.compute_tf_table(col)
+    a = df.head(5).copy()
+    b = df.iloc[5:10].copy()
+    sa = db_api.register(a, dataset_display_name="score_a")
+    sb = db_api.register(b, dataset_display_name="score_b")
+    con.execute(
+        f"COPY (SELECT * FROM {sa.physical_name} ORDER BY unique_id) TO '{OUT / 'score_pairs_a.parquet'}' (FORMAT PARQUET)"
+    )
+    con.execute(
+        f"COPY (SELECT * FROM {sb.physical_name} ORDER BY unique_id) TO '{OUT / 'score_pairs_b.parquet'}' (FORMAT PARQUET)"
+    )
+    sp = linker.inference.score_pairs(sa, sb)
+    export_table(
+        con,
+        sp.physical_name,
+        OUT / "score_pairs.parquet",
+        "unique_id_l, unique_id_r",
+    )
+
+    # n_largest_blocks: biggest blocking-key blocks for a rule.
+    con2, db2 = new_db_api()
+    sdf2 = db2.register(df, dataset_display_name="fake_1000")
+    nlb = n_largest_blocks(
+        sdf2,
+        blocking_rule=block_on("first_name"),
+        link_type="dedupe_only",
+        n_largest=5,
+    )
+    nlb_df = nlb.as_pandas_dataframe()
+    con2.execute("CREATE TABLE _nlb AS SELECT * FROM nlb_df")
+    export_table(con2, "_nlb", OUT / "n_largest_blocks.parquet", "block_count desc")
+
+
 def gen_blocking_analysis_golden() -> None:
     """Per-rule comparison counts for the model's blocking rules (exact, no
     sampling), via Splink's count_comparisons_from_blocking_rules."""
@@ -529,6 +593,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     gen_accuracy_golden()
     gen_blocking_analysis_golden()
+    gen_batch1_goldens()
 
     # ------------------------------------------------------------------
     # Manifest.

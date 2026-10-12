@@ -9,9 +9,10 @@
 use std::collections::BTreeMap;
 
 use crate::blocking::BlockingRule;
-use crate::error::Result;
+use crate::error::{DedupeError, Result};
 use crate::session::{Session, TableHandle};
 use crate::settings::Settings;
+use crate::sql::columns;
 use crate::sql::pipeline::CtePipeline;
 use crate::stages::block::{self, BLOCKED_ID_PAIRS};
 use crate::stages::uid_expr_for;
@@ -89,4 +90,68 @@ pub fn count_comparisons_from_blocking_rules(
         });
     }
     Ok(out)
+}
+
+/// A block (distinct blocking-key value) and its equi-join cardinality.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LargestBlock {
+    pub key_values: Vec<String>,
+    pub count_l: i64,
+    pub count_r: i64,
+    pub block_count: i64,
+}
+
+/// The `n` blocking-key values producing the largest equi-join blocks
+/// (`count_l * count_r`), mirroring Splink's `n_largest_blocks`. The rule must
+/// be a pure equi-join (a conjunction of column equalities, e.g. `block_on`);
+/// filter conditions are not supported. Dedupe path (both sides = concat).
+pub fn n_largest_blocks(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    rule: &str,
+    n_largest: usize,
+) -> Result<Vec<LargestBlock>> {
+    let _ = settings;
+    let keys = columns::equi_join_columns(rule, "n_largest_blocks")?.ok_or_else(|| {
+        DedupeError::settings(format!(
+            "n_largest_blocks requires a pure equi-join blocking rule (got `{rule}`)"
+        ))
+    })?;
+    let key_select = keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| format!("\"{k}\" as key_{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let key_cols = (0..keys.len())
+        .map(|i| format!("key_{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = format!(
+        "with l as (select {key_select}, count(*) as count_l from {c} group by {gb}),\n\
+             r as (select {key_select}, count(*) as count_r from {c} group by {gb})\n\
+         select {key_cols}, count_l, count_r, count_l * count_r as block_count\n\
+         from l join r using ({key_cols})\n\
+         order by block_count desc\n\
+         limit {n_largest}",
+        c = concat.physical,
+        gb = keys
+            .iter()
+            .map(|k| format!("\"{k}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    let rows = session.query_strings(&sql)?;
+    let n_keys = keys.len();
+    Ok(rows
+        .into_iter()
+        .map(|r| LargestBlock {
+            key_values: r[..n_keys].to_vec(),
+            count_l: r[n_keys].parse().unwrap(),
+            count_r: r[n_keys + 1].parse().unwrap(),
+            block_count: r[n_keys + 2].parse().unwrap(),
+        })
+        .collect())
 }

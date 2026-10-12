@@ -182,9 +182,76 @@ pub fn exact_match_columns(sql_condition: &str, context: &str) -> Result<Option<
     Ok(Some(cols))
 }
 
+/// Equi-join columns of a blocking rule written in table-prefixed form
+/// (`l.col = r.col [AND ...]`): `Some(cols)` if every top-level AND conjunct is
+/// an equality of two column references naming the same column; `None`
+/// otherwise (e.g. the rule has a filter condition). Unlike
+/// `exact_match_columns`, the operands are table-qualified (`l.`/`r.`) and the
+/// column name is taken as-is (no `_l`/`_r` stripping).
+pub fn equi_join_columns(sql: &str, context: &str) -> Result<Option<Vec<String>>> {
+    let expr = parse_expr(sql, context)?;
+    let col_name = |e: &Expr| -> Option<String> {
+        match e {
+            Expr::Identifier(id) => Some(ident_name(id)),
+            Expr::CompoundIdentifier(parts) if !parts.is_empty() => {
+                Some(ident_name(parts.last().unwrap()))
+            }
+            Expr::Nested(inner) => match inner.as_ref() {
+                Expr::Identifier(id) => Some(ident_name(id)),
+                Expr::CompoundIdentifier(parts) if !parts.is_empty() => {
+                    Some(ident_name(parts.last().unwrap()))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    let mut cols = Vec::new();
+    for conjunct in conjuncts(&expr) {
+        let Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } = conjunct
+        else {
+            return Ok(None);
+        };
+        let (Some(l), Some(r)) = (col_name(left), col_name(right)) else {
+            return Ok(None);
+        };
+        if l != r {
+            return Ok(None);
+        }
+        if !cols.contains(&l) {
+            cols.push(l);
+        }
+    }
+    Ok(Some(cols))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equi_join_column_extraction() {
+        assert_eq!(
+            equi_join_columns(r#"l."first_name" = r."first_name""#, "t").unwrap(),
+            Some(vec!["first_name".to_string()])
+        );
+        assert_eq!(
+            equi_join_columns(
+                r#"(l."first_name" = r."first_name") AND (l."city" = r."city")"#,
+                "t"
+            )
+            .unwrap(),
+            Some(vec!["first_name".to_string(), "city".to_string()])
+        );
+        assert_eq!(
+            equi_join_columns(r#"l."dob" = r."dob" and l.x > r.y"#, "t").unwrap(),
+            None
+        );
+    }
 
     #[test]
     fn extracts_columns_from_simple_equality() {

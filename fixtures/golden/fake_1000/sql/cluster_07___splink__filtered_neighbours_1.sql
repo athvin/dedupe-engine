@@ -1,14 +1,14 @@
 -- templated: __splink__filtered_neighbours_1
--- physical: __splink__filtered_neighbours_1_6b167cb0c
-CREATE TABLE __splink__filtered_neighbours_1_6b167cb0c AS
+-- physical: __splink__filtered_neighbours_1_a05ddd765
+CREATE TABLE __splink__filtered_neighbours_1_a05ddd765 AS
 select
     l.representative as node_rep,
     n.node_id,
     n.neighbour,
     r.representative as neighbour_rep
-from __splink__df_neighbours_5516e4a35 as n
-left join __splink__representatives_1_15ed248fe as l
+from __splink__df_neighbours_1bbf3c96b as n
+left join __splink__representatives_1_023fb1153 as l
 on l.node_id = n.node_id
-left join __splink__representatives_1_15ed248fe as r
+left join __splink__representatives_1_023fb1153 as r
 on n.neighbour = r.node_id
 where l.representative <> r.representative

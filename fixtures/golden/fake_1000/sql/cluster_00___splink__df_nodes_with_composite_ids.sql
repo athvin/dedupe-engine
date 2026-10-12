@@ -1,6 +1,6 @@
 -- templated: __splink__df_nodes_with_composite_ids
--- physical: __splink__df_nodes_with_composite_ids_b4ae02e7f
-CREATE TABLE __splink__df_nodes_with_composite_ids_b4ae02e7f AS
+-- physical: __splink__df_nodes_with_composite_ids_bdacedd66
+CREATE TABLE __splink__df_nodes_with_composite_ids_bdacedd66 AS
 WITH
 
 __splink__df_concat as (

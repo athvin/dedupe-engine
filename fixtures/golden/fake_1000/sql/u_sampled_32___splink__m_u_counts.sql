@@ -1,6 +1,6 @@
 -- templated: __splink__m_u_counts
--- physical: __splink__m_u_counts_d968f474b
-CREATE TABLE __splink__m_u_counts_d968f474b AS
+-- physical: __splink__m_u_counts_0d78e637b
+CREATE TABLE __splink__m_u_counts_0d78e637b AS
 WITH
 
 __splink__blocked_id_pairs as (
@@ -12,8 +12,8 @@ __splink__blocked_id_pairs as (
     "l"."email" AS "email_l",
     "r"."email" AS "email_r",
     '0' as match_key
-    from __splink__df_concat_sample_47294ddf3 as l
-    inner join __splink__df_concat_sample_47294ddf3 as r
+    from __splink__df_concat_sample_547ea72d2 as l
+    inner join __splink__df_concat_sample_547ea72d2 as r
     on
     (1=1)
     where l."unique_id" < r."unique_id" AND (ABS(hash(r."unique_id")) % 10) + 1 = 9

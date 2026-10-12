@@ -116,6 +116,35 @@ pub fn comparison_vectors_pipeline(
     p
 }
 
+/// Deterministic link: candidate pairs from the blocking rules joined back to
+/// their record columns, with NO probabilistic scoring. The output is the
+/// `blocked_with_cols` table (uid + comparison/tf columns as `_l`/`_r`, plus
+/// `match_key`). Use for strict rule-based linkage.
+pub fn deterministic_link(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    tf_tables: &[TableHandle],
+) -> Result<TableHandle> {
+    let uid = uid_expr_for(settings);
+    let blocked = materialize_blocked_pairs(session, settings, concat)?;
+    let mut p = CtePipeline::new().with_input(concat).with_input(&blocked);
+    for t in tf_tables {
+        p.add_input(t);
+    }
+    p.enqueue(
+        tf::concat_with_tf_sql(&settings.tf_columns(), &settings.tf_prefix),
+        DF_CONCAT_WITH_TF,
+    );
+    p.enqueue(
+        vectors::blocked_with_cols_sql(settings, &uid),
+        BLOCKED_WITH_COLS,
+    );
+    let out = session.materialize(&p)?;
+    session.drop_table(&blocked)?;
+    Ok(out)
+}
+
 /// Full predict pipeline: comparison vectors -> match weight parts ->
 /// `__splink__df_predict` scored with the settings' current parameters.
 pub fn predict_pipeline(

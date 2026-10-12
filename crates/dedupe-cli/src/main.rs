@@ -4,8 +4,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use args::{
-    AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, CountComparisonsArgs, InputSource,
-    LinkNewArgs, LinkNewScope, PredictArgs, SnapshotsArgs, TrainArgs,
+    AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, CountComparisonsArgs,
+    DeterministicLinkArgs, InputSource, LinkNewArgs, LinkNewScope, PredictArgs, SnapshotsArgs,
+    TrainArgs,
 };
 use clap::Parser;
 use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
@@ -34,7 +35,31 @@ fn run() -> Result<()> {
         Command::Accuracy(a) => accuracy(a),
         Command::CountComparisons(a) => count_comparisons(a),
         Command::Snapshots(a) => snapshots(a),
+        Command::DeterministicLink(a) => deterministic_link(a),
     }
+}
+
+fn deterministic_link(a: DeterministicLinkArgs) -> Result<()> {
+    let settings = Settings::from_json_file(Path::new(&a.settings)).context("loading settings")?;
+    let session = open_session(&a.source)?;
+    let inputs = resolve_inputs(&session, &a.source)?;
+    let refs: Vec<(&TableHandle, &str)> = inputs.iter().map(|(h, n)| (h, n.as_str())).collect();
+    let concat = predict::materialize_concat_multi(&session, &refs, &settings)?;
+    let tf = predict::materialize_tf_tables(&session, &settings, &concat)?;
+    let pairs = predict::deterministic_link(&session, &settings, &concat, &tf)?;
+    let n = session.count(&pairs.physical)?;
+
+    if let Some(path) = &a.output_parquet {
+        write_parquet(&session, &pairs, path)?;
+    }
+    if a.source.catalog.is_some() {
+        session.write_to_lake(&pairs, &a.output)?;
+        eprintln!("wrote {n} deterministic pairs to lake table `{}`", a.output);
+    } else if a.output_parquet.is_none() {
+        bail!("no output target: provide --catalog (lake) or --output-parquet");
+    }
+    println!("{n}");
+    Ok(())
 }
 
 fn snapshots(a: SnapshotsArgs) -> Result<()> {
