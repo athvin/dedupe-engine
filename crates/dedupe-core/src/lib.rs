@@ -16,6 +16,7 @@ pub mod incremental;
 pub mod linker;
 pub mod model;
 pub mod predict;
+pub mod profile;
 pub mod scoring;
 pub mod session;
 pub mod settings;

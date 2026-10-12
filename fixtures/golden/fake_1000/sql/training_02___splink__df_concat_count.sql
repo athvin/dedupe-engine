@@ -1,6 +1,6 @@
 -- templated: __splink__df_concat_count
--- physical: __splink__df_concat_count_8d4304cbd
-CREATE TABLE __splink__df_concat_count_8d4304cbd AS
+-- physical: __splink__df_concat_count_23697fafe
+CREATE TABLE __splink__df_concat_count_23697fafe AS
 WITH
 
 __splink__df_concat as (

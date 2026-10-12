@@ -1,6 +1,6 @@
--- templated: __splink__df_tf_surname
--- physical: __splink__df_tf_surname_e781fc796
-CREATE TABLE __splink__df_tf_surname_e781fc796 AS
+-- templated: __splink__df_tf_email
+-- physical: __splink__df_tf_email_631ddbc0a
+CREATE TABLE __splink__df_tf_email_631ddbc0a AS
 WITH
 
 __splink__df_concat as (
@@ -15,11 +15,11 @@ __splink__df_concat as (
             from fake_1000
 )
 select
-"surname",
+"email",
 cast(count(*) as float8) / (
-    select count("surname") as total
+    select count("email") as total
     from __splink__df_concat
-) as "tf_surname"
+) as "tf_email"
 from __splink__df_concat
-where "surname" is not null
-group by "surname"
+where "email" is not null
+group by "email"

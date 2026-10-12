@@ -469,6 +469,58 @@ def gen_batch3_goldens() -> None:
     )
 
 
+def gen_batch4_goldens() -> None:
+    """completeness, column value frequencies, m-from-labels (column + table)."""
+    from splink.internals.completeness import completeness_data
+
+    con, db_api = new_db_api()
+    df = pd.read_csv(DATA)
+    sdf = db_api.register(df, dataset_display_name="fake_1000")
+    prof_cols = ["first_name", "surname", "dob", "city", "email"]
+
+    # Completeness (public data function).
+    comp = completeness_data({"fake_1000": sdf}, db_api, cols=prof_cols)
+    (OUT / "completeness.json").write_text(json.dumps(comp, indent=2, default=str))
+
+    # Column value frequencies (Splink's profile value-frequency SQL), for two
+    # bounded-cardinality columns.
+    con.execute(
+        "CREATE TABLE _concat AS SELECT * FROM read_csv('datasets/fake_1000.csv', "
+        "auto_type_candidates=['BIGINT','DOUBLE','VARCHAR'])"
+    )
+    parts = []
+    for c in ["first_name", "city"]:
+        parts.append(
+            f"""select count(*) as value_count, '{c}' as group_name, cast("{c}" as varchar) as value,
+            (select count("{c}") from _concat) as total_non_null_rows,
+            (select count(*) from _concat) as total_rows_inc_nulls,
+            (select count(distinct "{c}") from _concat) as distinct_value_count
+            from _concat where "{c}" is not null group by "{c}" """
+        )
+    con.execute(
+        "CREATE TABLE _vf AS " + "\nUNION ALL\n".join(parts)
+    )
+    export_table(con, "_vf", OUT / "value_frequencies.parquet", "group_name, value_count desc, value")
+
+    # m-from-labels (column): start untrained, train m from the cluster column.
+    init = json.loads((OUT / "model_initial.json").read_text())
+    con_c, db_c = new_db_api()
+    sdf_c = db_c.register(df, dataset_display_name="fake_1000")
+    lk_c = Linker(sdf_c, init)
+    lk_c.training.estimate_m_from_label_column("cluster")
+    lk_c.misc.save_model_to_json(OUT / "model_m_from_label_column.json", overwrite=True)
+
+    # m-from-labels (pairwise table): reuse the labels table from batch 3.
+    con_t, db_t = new_db_api()
+    sdf_t = db_t.register(df, dataset_display_name="fake_1000")
+    lk_t = Linker(sdf_t, init)
+    labels_df = pd.read_parquet(OUT / "labels_table.parquet")
+    labels = db_t.register(labels_df, dataset_display_name="labels")
+    lk_t.table_management.register_labels_table(labels)
+    lk_t.training.estimate_m_from_pairwise_labels(labels)
+    lk_t.misc.save_model_to_json(OUT / "model_m_from_pairwise_labels.json", overwrite=True)
+
+
 def gen_blocking_analysis_golden() -> None:
     """Per-rule comparison counts for the model's blocking rules (exact, no
     sampling), via Splink's count_comparisons_from_blocking_rules."""
@@ -698,6 +750,7 @@ def main() -> None:
     gen_batch1_goldens()
     gen_batch2_goldens()
     gen_batch3_goldens()
+    gen_batch4_goldens()
 
     # ------------------------------------------------------------------
     # Manifest.

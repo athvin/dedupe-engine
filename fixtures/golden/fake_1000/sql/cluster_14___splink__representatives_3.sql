@@ -1,6 +1,6 @@
 -- templated: __splink__representatives_3
--- physical: __splink__representatives_3_2eecc9e48
-CREATE TABLE __splink__representatives_3_2eecc9e48 AS
+-- physical: __splink__representatives_3_ce29e8634
+CREATE TABLE __splink__representatives_3_ce29e8634 AS
 WITH
 
 __splink__rep_updates as (
@@ -19,7 +19,7 @@ __splink__rep_updates as (
             neighbour_rep as representative,
             0 as stable
 
-        from __splink__filtered_neighbours_2_b5b0993db
+        from __splink__filtered_neighbours_2_c8c92fe41
 
         union all
 
@@ -29,7 +29,7 @@ __splink__rep_updates as (
             representative,
             1 as stable
 
-        from __splink__representatives_unstable_2_30bc3ff68
+        from __splink__representatives_unstable_2_e52f93c9f
 
     ) as rep_union
     group by old_rep
@@ -42,5 +42,5 @@ select
 
 from __splink__rep_updates as r
 
-left join __splink__representatives_unstable_2_30bc3ff68 as repr
+left join __splink__representatives_unstable_2_e52f93c9f as repr
 on r.old_rep = repr.representative

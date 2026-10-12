@@ -1,6 +1,6 @@
 -- templated: __splink__df_comparison_vectors
--- physical: __splink__df_comparison_vectors_675eec966
-CREATE TABLE __splink__df_comparison_vectors_675eec966 AS
+-- physical: __splink__df_comparison_vectors_8ce534105
+CREATE TABLE __splink__df_comparison_vectors_8ce534105 AS
 WITH
 
 __splink__df_concat as (
@@ -18,11 +18,11 @@ __splink__df_concat as (
 __splink__df_concat_with_tf as (
     select
         __splink__df_concat.*,
-        __splink__df_tf_email_3ef038b03."tf_email",
-        __splink__df_tf_city_7b3b60b27."tf_city"
+        __splink__df_tf_email_631ddbc0a."tf_email",
+        __splink__df_tf_city_b487f6ea2."tf_city"
         from __splink__df_concat
-        left join __splink__df_tf_email_3ef038b03 on __splink__df_concat."email" = __splink__df_tf_email_3ef038b03."email"
-    left join __splink__df_tf_city_7b3b60b27 on __splink__df_concat."city" = __splink__df_tf_city_7b3b60b27."city"
+        left join __splink__df_tf_email_631ddbc0a on __splink__df_concat."email" = __splink__df_tf_email_631ddbc0a."email"
+    left join __splink__df_tf_city_b487f6ea2 on __splink__df_concat."city" = __splink__df_tf_city_b487f6ea2."city"
 ), 
 
 blocked_with_cols as (
@@ -39,12 +39,12 @@ blocked_with_cols as (
     "r"."email" AS "email_r",
     "l"."tf_email" AS "tf_email_l",
     "r"."tf_email" AS "tf_email_r",
-    "l"."first_name" AS "first_name_l",
-    "r"."first_name" AS "first_name_r",
     "l"."surname" AS "surname_l",
     "r"."surname" AS "surname_r",
+    "l"."first_name" AS "first_name_l",
+    "r"."first_name" AS "first_name_r",
     b.match_key
-    from __splink__blocked_id_pairs_8de5e3af7 as b
+    from __splink__blocked_id_pairs_71d3c1477 as b
     inner join __splink__df_concat_with_tf as l
     on l."unique_id" = b.join_key_l
     inner join __splink__df_concat_with_tf as r
