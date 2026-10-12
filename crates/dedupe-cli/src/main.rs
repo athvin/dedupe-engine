@@ -4,9 +4,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use args::{
-    Cli, ClusterArgs, Command, InputSource, LinkNewArgs, LinkNewScope, PredictArgs, TrainArgs,
+    Cli, ClusterArgs, ClusterNewArgs, Command, InputSource, LinkNewArgs, LinkNewScope, PredictArgs,
+    TrainArgs,
 };
 use clap::Parser;
+use dedupe_core::clustering::{ClusterOptions, clustered_with_input_data, incremental_cluster};
 use dedupe_core::incremental::{predict_between, predict_within};
 use dedupe_core::linker::{Linker, TrainConfig};
 use dedupe_core::predict;
@@ -26,6 +28,7 @@ fn run() -> Result<()> {
         Command::Predict(a) => predict(a),
         Command::Cluster(a) => cluster(a),
         Command::LinkNew(a) => link_new(a),
+        Command::ClusterNew(a) => cluster_new(a),
     }
 }
 
@@ -209,6 +212,65 @@ fn link_new(a: LinkNewArgs) -> Result<()> {
             "wrote {n} incremental predictions to lake table `{}`",
             a.output
         );
+    } else if a.output_parquet.is_none() {
+        bail!("no output target: provide --catalog (lake) or --output-parquet");
+    }
+    println!("{n}");
+    Ok(())
+}
+
+fn cluster_new(a: ClusterNewArgs) -> Result<()> {
+    let settings = Settings::from_json_file(Path::new(&a.model)).context("loading model JSON")?;
+    let session = open_session(&a.source)?;
+    let input = register_input(&session, &a.source, "input_table")?;
+    let all_concat = predict::materialize_concat(&session, &input)?;
+
+    // Existing clusters, normalised to (node_id, cluster_id).
+    let existing_raw = if let Some(parquet) = &a.existing_clusters_parquet {
+        let p = parquet.replace('\'', "''");
+        session.register_table(&format!("read_parquet('{p}')"), "existing_clusters_raw")?
+    } else if let Some(table) = &a.existing_clusters {
+        session.register_lake_table(table, "existing_clusters_raw")?
+    } else {
+        bail!("no existing clusters: use --existing-clusters or --existing-clusters-parquet");
+    };
+    let existing_clusters = session.register_table(
+        &format!(
+            "(select \"{uid}\" as node_id, cluster_id from {tbl})",
+            uid = settings.unique_id_column,
+            tbl = existing_raw.physical
+        ),
+        "existing_clusters",
+    )?;
+
+    let new_predictions = if let Some(parquet) = &a.predictions_parquet {
+        let p = parquet.replace('\'', "''");
+        session.register_table(&format!("read_parquet('{p}')"), "__splink__df_predict")?
+    } else if let Some(table) = &a.predictions {
+        session.register_lake_table(table, "__splink__df_predict")?
+    } else {
+        bail!("no new predictions: use --predictions or --predictions-parquet");
+    };
+
+    let clusters = incremental_cluster(
+        &session,
+        &settings,
+        &all_concat,
+        &existing_clusters,
+        &new_predictions,
+        ClusterOptions {
+            threshold_match_probability: a.threshold,
+        },
+    )?;
+    let joined = clustered_with_input_data(&session, &settings, &all_concat, &clusters)?;
+    let n = session.count(&joined.physical)?;
+
+    if let Some(path) = &a.output_parquet {
+        write_parquet(&session, &joined, path)?;
+    }
+    if a.source.catalog.is_some() {
+        session.write_to_lake(&joined, &a.output)?;
+        eprintln!("wrote {n} clustered rows to lake table `{}`", a.output);
     } else if a.output_parquet.is_none() {
         bail!("no output target: provide --catalog (lake) or --output-parquet");
     }

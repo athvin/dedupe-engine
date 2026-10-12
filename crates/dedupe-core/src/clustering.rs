@@ -199,6 +199,99 @@ pub fn cluster_at_threshold(
     Ok(output)
 }
 
+/// Incremental clustering: fold a new batch's edges into an existing cluster
+/// assignment without re-running connected components over the whole graph.
+///
+/// Correctness: the result is *identical* to fully re-clustering the combined
+/// edge set, because connected components is a pure function of (nodes, edges)
+/// and `cluster_id` is the minimum node id in a component. We exploit this by
+/// contracting each existing cluster to a single super-node, running
+/// connected components over just the new edges (mapped onto super-nodes),
+/// then expanding — far cheaper than re-clustering every node and edge.
+///
+/// Inputs:
+/// - `all_concat`: `__splink__df_concat`-shaped table of ALL records
+///   (existing + new).
+/// - `existing_clusters`: `(node_id, cluster_id)` for the already-clustered
+///   (existing) records.
+/// - `new_predictions`: scored pairs involving new records (its `unique_id_l`
+///   / `unique_id_r` / `match_probability` columns); pairs below the threshold
+///   are ignored.
+///
+/// Returns `(node_id, cluster_id)` for every record. This is dedupe-scoped
+/// (single bare unique-id column).
+pub fn incremental_cluster(
+    session: &Session,
+    settings: &Settings,
+    all_concat: &TableHandle,
+    existing_clusters: &TableHandle,
+    new_predictions: &TableHandle,
+    opts: ClusterOptions,
+) -> Result<TableHandle> {
+    let uid = uid_expr_for(settings);
+    let uid_col = &settings.unique_id_column;
+
+    // Every node's seed representative: its existing cluster id, or itself if
+    // it is a brand-new record not present in the existing assignment.
+    let all_reps = materialize_sql(
+        session,
+        &[all_concat, existing_clusters],
+        format!(
+            "select n.node_id, coalesce(e.cluster_id, n.node_id) as seed_rep\nfrom (select {node} as node_id from {concat}) as n\nleft join {existing} as e on n.node_id = e.node_id",
+            node = uid.render_bare(),
+            concat = all_concat.templated,
+            existing = existing_clusters.templated,
+        ),
+        "__splink__df_incremental_reps",
+    )?;
+
+    // Super-node graph: distinct seed reps are the nodes, and each new edge
+    // (above threshold) becomes an edge between its endpoints' seed reps.
+    let seed_nodes = materialize_sql(
+        session,
+        &[&all_reps],
+        format!(
+            "select distinct seed_rep as \"{uid_col}\" from {}",
+            all_reps.templated
+        ),
+        "__splink__df_incremental_seed_nodes",
+    )?;
+    let threshold = pyrepr(opts.threshold_match_probability);
+    let seed_edges = materialize_sql(
+        session,
+        &[new_predictions, &all_reps],
+        format!(
+            "select al.seed_rep as \"{uid_col}_l\", ar.seed_rep as \"{uid_col}_r\", p.match_probability\nfrom {preds} as p\njoin {reps} as al on al.node_id = {uid_l}\njoin {reps} as ar on ar.node_id = {uid_r}\nwhere p.match_probability >= {threshold}",
+            preds = new_predictions.templated,
+            reps = all_reps.templated,
+            uid_l = uid.render_suffixed("l"),
+            uid_r = uid.render_suffixed("r"),
+        ),
+        "__splink__df_incremental_seed_edges",
+    )?;
+
+    // Connected components over the (small) super-node graph.
+    let seed_clusters = cluster_at_threshold(session, settings, &seed_nodes, &seed_edges, opts)?;
+
+    // Expand: map every node through its seed rep to the merged cluster id.
+    let output = materialize_sql(
+        session,
+        &[&all_reps, &seed_clusters],
+        format!(
+            "select ar.node_id, sc.cluster_id\nfrom {reps} as ar\njoin {seed} as sc on ar.seed_rep = sc.node_id",
+            reps = all_reps.templated,
+            seed = seed_clusters.templated,
+        ),
+        "__splink__clustering_output_final",
+    )?;
+
+    session.drop_table(&all_reps)?;
+    session.drop_table(&seed_nodes)?;
+    session.drop_table(&seed_edges)?;
+    session.drop_table(&seed_clusters)?;
+    Ok(output)
+}
+
 /// Join the cluster assignment back to the input records.
 pub fn clustered_with_input_data(
     session: &Session,

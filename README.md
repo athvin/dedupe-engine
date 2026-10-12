@@ -28,6 +28,11 @@ The full core linkage pipeline, matching Splink's canonical workflow:
    `predict_between` (new × existing, cross pairs only) and `predict_within`
    (within the new batch), scoring with the trained model and term
    frequencies from the established data.
+7. **Incremental clustering** — fold a new batch's edges into an existing
+   cluster assignment without re-running connected components over the whole
+   graph (contract existing clusters to super-nodes, run CC over just the new
+   edges, expand). Splink has no such API, but the result is provably
+   identical to a full re-cluster of the combined edge set.
 
 Out of scope for v1: charts, exploratory profiling, blocking analysis, link
 (non-dedupe) types, exploding blocking rules.
@@ -71,6 +76,12 @@ dedupe link-new --model model.json \
   --catalog catalog.ducklake --data-path ./data \
   --input people --new-input new_arrivals \
   --scope both --output incremental_predictions
+
+# Fold those new predictions into the existing clusters (no full re-cluster).
+dedupe cluster-new --model model.json \
+  --catalog catalog.ducklake --data-path ./data \
+  --input all_people --existing-clusters clusters \
+  --predictions incremental_predictions --threshold 0.95 --output clusters
 ```
 
 `--input-csv` / `--input-parquet` and `--output-parquet` bypass the lake for

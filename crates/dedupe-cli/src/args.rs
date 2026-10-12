@@ -19,6 +19,9 @@ pub enum Command {
     /// Incrementally match a new batch of records against an existing dataset
     /// (and within the new batch), using a trained model.
     LinkNew(LinkNewArgs),
+    /// Fold a new batch's predictions into an existing cluster assignment
+    /// without re-clustering the whole graph.
+    ClusterNew(ClusterNewArgs),
 }
 
 /// How to locate the input records.
@@ -116,6 +119,38 @@ pub struct LinkNewArgs {
     pub threshold_match_probability: Option<f64>,
     /// Output table name written to the lake.
     #[arg(long, default_value = "incremental_predictions")]
+    pub output: String,
+    /// Also write output to this Parquet file (when not using a lake).
+    #[arg(long)]
+    pub output_parquet: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ClusterNewArgs {
+    /// Trained model JSON (for id/settings context).
+    #[arg(long)]
+    pub model: String,
+    /// All records (existing + new) — provides the node set.
+    #[command(flatten)]
+    pub source: InputSource,
+    /// Existing cluster assignment as a lake table (needs unique_id +
+    /// cluster_id columns).
+    #[arg(long)]
+    pub existing_clusters: Option<String>,
+    /// Existing cluster assignment as a Parquet file.
+    #[arg(long)]
+    pub existing_clusters_parquet: Option<String>,
+    /// New-batch predictions as a lake table.
+    #[arg(long)]
+    pub predictions: Option<String>,
+    /// New-batch predictions as a Parquet file.
+    #[arg(long)]
+    pub predictions_parquet: Option<String>,
+    /// Cluster at this match-probability threshold.
+    #[arg(long, default_value_t = 0.95)]
+    pub threshold: f64,
+    /// Output table name written to the lake.
+    #[arg(long, default_value = "clusters")]
     pub output: String,
     /// Also write output to this Parquet file (when not using a lake).
     #[arg(long)]
