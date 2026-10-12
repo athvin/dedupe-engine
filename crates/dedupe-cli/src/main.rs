@@ -345,6 +345,31 @@ fn predict(a: PredictArgs) -> Result<()> {
     let inputs = resolve_inputs(&session, &a.source)?;
 
     let linker = build_linker(&session, settings, &inputs)?;
+
+    // Streaming path: write each chunk straight to the lake table (constant
+    // memory), never holding the full result in a temp table.
+    if a.stream {
+        if a.source.catalog.is_none() {
+            bail!("--stream writes to the lake; provide --catalog");
+        }
+        if a.output_parquet.is_some() {
+            bail!("--stream writes to the lake table; drop --output-parquet");
+        }
+        let n = linker.predict_chunked_to_lake(
+            &a.output,
+            a.threshold_match_probability,
+            a.num_chunks,
+            &a.source.lake_write_options(),
+        )?;
+        eprintln!(
+            "streamed {n} predictions to lake table `{}` in {} pass(es)",
+            a.output,
+            a.num_chunks.max(1)
+        );
+        println!("{n}");
+        return Ok(());
+    }
+
     let predictions = linker.predict_chunked(a.threshold_match_probability, a.num_chunks)?;
     let n = session.count(&predictions.physical)?;
 

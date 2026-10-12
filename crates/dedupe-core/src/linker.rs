@@ -177,6 +177,62 @@ impl<'a> Linker<'a> {
         })
     }
 
+    /// Chunked predict that **streams each pass straight to a lake table**
+    /// rather than accumulating the full result in a temp table — peak memory
+    /// stays at one pass (~`1/num_chunks` of the pairs) end to end. Pass 0
+    /// creates the target (empty + partitioned, or directly) and writes its
+    /// rows; each later pass appends and is flushed to Parquet before the next
+    /// begins. The written table is identical to [`predict`](Self::predict)'s
+    /// output (order aside). Returns the row count.
+    ///
+    /// Each pass commits its own snapshot (committing is what frees the memory),
+    /// so a run of N chunks leaves N snapshots — run `dedupe maintenance
+    /// --checkpoint` afterwards to compact them. Requires an attached writable
+    /// lake. See PERFORMANCE.md.
+    pub fn predict_chunked_to_lake(
+        &self,
+        target: &str,
+        threshold_match_probability: Option<f64>,
+        num_chunks: u32,
+        lake_opts: &crate::session::ducklake::LakeWriteOptions,
+    ) -> Result<i64> {
+        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_mw);
+        let n = num_chunks.max(1);
+        let mut created = false;
+        for i in 0..n {
+            let chunk = if n > 1 { Some((i, n)) } else { None };
+            let blocked = predict::materialize_blocked_pairs_chunk(
+                self.session,
+                &self.model.settings,
+                &self.concat,
+                chunk,
+            )?;
+            let pipeline = predict::predict_pipeline(
+                &self.model.settings,
+                &self.concat,
+                &self.tf_tables,
+                &blocked,
+                threshold_mw,
+            )?;
+            let part = self.session.materialize(&pipeline)?;
+            self.session.drop_table(&blocked)?;
+            if created {
+                self.session
+                    .lake_append(&part, target, &lake_opts.order_by)?;
+            } else {
+                // First pass seeds the table (handles partitioning + the first
+                // batch of rows via the standard create-or-replace write).
+                self.session.write_to_lake_with(&part, target, lake_opts)?;
+                created = true;
+            }
+            self.session.drop_table(&part)?;
+        }
+        let back = self
+            .session
+            .register_lake_table(target, "__splink__stream_count")?;
+        self.session.count(&back.physical)
+    }
+
     /// Cluster predictions at a probability threshold and join back to inputs.
     pub fn cluster(
         &self,

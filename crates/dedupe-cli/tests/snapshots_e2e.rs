@@ -2,12 +2,25 @@
 //! list snapshots, and read the table as of each version. Gated behind
 //! DEDUPE_E2E_DUCKLAKE=1 (installs the ducklake extension).
 
+use std::path::Path;
+
+use dedupe_core::linker::Linker;
 use dedupe_core::session::{Session, SessionOptions, TableHandle};
-use dedupe_core::{DuckLakeConfig, LakeWriteOptions};
+use dedupe_core::{DuckLakeConfig, LakeWriteOptions, Settings};
 
 fn enabled() -> bool {
     std::env::var("DEDUPE_E2E_DUCKLAKE").as_deref() == Ok("1")
 }
+
+const FAKE_1000_SCHEMA: &[(&str, &str)] = &[
+    ("unique_id", "BIGINT"),
+    ("first_name", "VARCHAR"),
+    ("surname", "VARCHAR"),
+    ("dob", "VARCHAR"),
+    ("city", "VARCHAR"),
+    ("email", "VARCHAR"),
+    ("cluster", "BIGINT"),
+];
 
 #[test]
 fn snapshots_and_time_travel() {
@@ -68,6 +81,80 @@ fn snapshots_and_time_travel() {
         .unwrap();
     assert_eq!(session.count(&at_v1.physical).unwrap(), 2);
     assert_eq!(session.count(&at_v2.physical).unwrap(), 4);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn streaming_chunked_predict_matches_direct() {
+    if !enabled() {
+        eprintln!("skipping DuckLake streaming-predict e2e (set DEDUPE_E2E_DUCKLAKE=1 to run)");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join(format!("dedupe_stream_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("data")).unwrap();
+
+    let mut session = Session::open_in_memory(SessionOptions::default()).unwrap();
+    session
+        .attach_ducklake(&DuckLakeConfig {
+            metadata: tmp.join("c.ducklake").to_string_lossy().into_owned(),
+            data_path: Some(tmp.join("data").to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let settings =
+        Settings::from_json_file(&fixtures.join("golden/fake_1000/model_final.json")).unwrap();
+    let input = session
+        .register_csv(
+            &fixtures.join("datasets/fake_1000.csv"),
+            "input",
+            FAKE_1000_SCHEMA,
+        )
+        .unwrap();
+    let linker = Linker::new(&session, settings, &input).unwrap();
+
+    // Stream to a lake table partitioned by match_key, in 3 passes.
+    let streamed = linker
+        .predict_chunked_to_lake(
+            "preds",
+            None,
+            3,
+            &LakeWriteOptions {
+                partition_by: vec!["match_key".into()],
+                order_by: vec![],
+            },
+        )
+        .unwrap();
+
+    // Direct single-shot predict for comparison.
+    let direct = linker.predict(None).unwrap();
+    let direct_n = session.count(&direct.physical).unwrap();
+    assert_eq!(
+        streamed, direct_n,
+        "streamed row count must equal direct predict"
+    );
+
+    // The streamed lake table must equal the direct output exactly (per-row
+    // scoring is deterministic, so match_weight compares bit-for-bit).
+    let back = session.register_lake_table("preds", "preds_v").unwrap();
+    let diff = session
+        .query_scalar_f64(&format!(
+            "SELECT count(*)::DOUBLE FROM ( \
+               SELECT unique_id_l, unique_id_r, match_key, match_weight FROM {s} \
+               EXCEPT \
+               SELECT unique_id_l, unique_id_r, match_key, match_weight FROM {d})",
+            s = back.physical,
+            d = direct.physical,
+        ))
+        .unwrap() as i64;
+    assert_eq!(
+        diff, 0,
+        "streamed predictions must equal direct predictions"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

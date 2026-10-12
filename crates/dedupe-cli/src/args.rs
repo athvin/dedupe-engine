@@ -151,6 +151,12 @@ pub struct PredictArgs {
     /// score at once; the result is identical. See PERFORMANCE.md.
     #[arg(long, default_value_t = 1)]
     pub num_chunks: u32,
+    /// Stream each chunk straight to the lake output table instead of
+    /// accumulating the full result first — constant memory end to end.
+    /// Requires --catalog; each pass commits a snapshot (compact afterwards
+    /// with `dedupe maintenance --checkpoint`).
+    #[arg(long)]
+    pub stream: bool,
 }
 
 #[derive(Args, Debug)]

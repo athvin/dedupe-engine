@@ -290,6 +290,24 @@ impl Session {
         self.latest_snapshot_version()
     }
 
+    /// Append `src` to an existing lake table (one auto-committed snapshot),
+    /// optionally ordered on write. Rows route to partitions automatically if
+    /// the target is partitioned. Used by streaming/chunked writes, where each
+    /// call flushes its Parquet and frees memory before the next pass.
+    pub fn lake_append(&self, src: &TableHandle, target: &str, order_by: &[String]) -> Result<()> {
+        let lake = self.lake()?;
+        let order = if order_by.is_empty() {
+            String::new()
+        } else {
+            format!(" ORDER BY {}", quote_ident_list(order_by))
+        };
+        self.conn.execute_batch(&format!(
+            "INSERT INTO {}.{}.{target} SELECT * FROM {}{order};",
+            lake.alias, lake.schema, src.physical
+        ))?;
+        Ok(())
+    }
+
     /// The most recent snapshot version in the attached lake.
     pub fn latest_snapshot_version(&self) -> Result<i64> {
         let lake = self.lake()?;

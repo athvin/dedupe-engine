@@ -98,6 +98,19 @@ is the default and dispatches straight to the unchunked path. This mirrors
 Splink's `num_chunks` (RHS hash chunking), deliberately defaulted to 1 so parity
 is preserved until you opt into chunking.
 
+By default the passes accumulate into one temp table, so the *final result*
+still lands in memory (DuckDB spills it if needed). For **constant memory end to
+end**, stream each pass straight to the lake instead:
+`Linker::predict_chunked_to_lake(target, .., num_chunks, lake_opts)` (CLI
+`dedupe predict --num-chunks N --stream`). Pass 0 creates the (optionally
+partitioned) target and writes its rows; each later pass appends and is flushed
+to Parquet — and freed — before the next begins, so peak memory is one pass, not
+the whole result. The written table equals the single-shot output
+(`streaming_chunked_predict_matches_direct` asserts it exactly). Committing is
+what frees the memory, so a run of N chunks leaves N snapshots; compact them
+afterwards with `dedupe maintenance --checkpoint`. Pair `--stream` with
+`--partition-by` to land the output already partitioned for downstream reads.
+
 ## DuckLake layout: partitioning & "clustering keys"
 
 DuckLake stores tables as Parquet files with a SQL catalog. It has **no
