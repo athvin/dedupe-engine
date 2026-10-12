@@ -63,6 +63,7 @@ pub fn count_comparisons_from_blocking_rules(
             &settings.source_dataset_column,
             concat.templated.as_str(),
             &[],
+            None,
         ),
         BLOCKED_ID_PAIRS,
     );

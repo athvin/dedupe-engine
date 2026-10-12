@@ -73,6 +73,76 @@ fn snapshots_and_time_travel() {
 }
 
 #[test]
+fn maintenance_runs_on_catalog() {
+    if !enabled() {
+        eprintln!("skipping DuckLake maintenance e2e (set DEDUPE_E2E_DUCKLAKE=1 to run)");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join(format!("dedupe_maint_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("data")).unwrap();
+
+    let mut session = Session::open_in_memory(SessionOptions::default()).unwrap();
+    session
+        .attach_ducklake(&DuckLakeConfig {
+            metadata: tmp.join("c.ducklake").to_string_lossy().into_owned(),
+            data_path: Some(tmp.join("data").to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Options round-trip (DuckLake normalizes `256MB` -> `256000000`).
+    session
+        .set_lake_option("target_file_size", "256MB")
+        .unwrap();
+    let opts = session.lake_options().unwrap();
+    assert!(
+        opts.iter()
+            .any(|(k, v)| k == "target_file_size" && !v.is_empty()),
+        "set option should be readable back"
+    );
+
+    // Several small writes => several data files; then delete to make a delete
+    // file, so compaction + rewrite have something to do.
+    session
+        .execute_batch("CREATE TEMP TABLE s AS SELECT i AS id, i % 5 AS g FROM range(1000) t(i)")
+        .unwrap();
+    let staged = TableHandle {
+        templated: "s".into(),
+        physical: "s".into(),
+        columns: vec!["id".into(), "g".into()],
+    };
+    session.write_to_lake(&staged, "m").unwrap();
+    session.write_to_lake(&staged, "m").unwrap(); // second snapshot
+    session
+        .execute_batch("DELETE FROM lake.main.m WHERE id % 10 = 0")
+        .unwrap();
+
+    let before = session.lake_table_stats().unwrap();
+    assert!(before.iter().any(|(n, _, _)| n == "m"));
+
+    // Each maintenance primitive must run without error.
+    session.flush_inlined_data().unwrap();
+    session.merge_adjacent_files(None, Some(100)).unwrap();
+    session.rewrite_data_files("m").unwrap();
+    session
+        .set_lake_option("expire_older_than", "0 days")
+        .unwrap();
+    session.expire_snapshots("0 days").unwrap();
+    session.cleanup_old_files().unwrap();
+    session.delete_orphaned_files().unwrap();
+    session.checkpoint_lake().unwrap();
+
+    // Data is still intact and readable after all maintenance.
+    let back = session.register_lake_table("m", "m_view").unwrap();
+    let rows = session.count(&back.physical).unwrap();
+    assert_eq!(rows, 1000 - 100, "deleted rows should be gone, rest intact");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn partitioned_write_prunes_by_partition() {
     if !enabled() {
         eprintln!("skipping DuckLake partition e2e (set DEDUPE_E2E_DUCKLAKE=1 to run)");

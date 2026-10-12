@@ -24,6 +24,20 @@ fn where_condition(uid: &UidExpr, link_type: LinkType, source_dataset_col: &str)
     }
 }
 
+/// A right-side hash-chunk filter: `and (hash(<uid_r>) % n) = i`, keeping only
+/// pairs whose *right* record falls in chunk `i` of `n`. Because the dedupe
+/// where-clause fixes `uid_l < uid_r`, every candidate pair has a single right
+/// record, so partitioning on it assigns each pair to exactly one chunk —
+/// unioning all chunks reproduces the full result with no duplicates. `None`
+/// or `n <= 1` yields no filter (byte-identical to the unchunked path).
+/// DuckDB's `hash()` is unsigned, so plain `%` matches Splink's DuckDB dialect.
+fn right_chunk_filter(uid: &UidExpr, chunk: Option<(u32, u32)>) -> String {
+    match chunk {
+        Some((i, n)) if n > 1 => format!("\nand (hash({}) % {n}) = {i}", uid.render("r")),
+        _ => String::new(),
+    }
+}
+
 fn exclude_preceding_sql(rule: &BlockingRule, preceding: &[&BlockingRule]) -> String {
     let _ = rule;
     if preceding.is_empty() {
@@ -100,6 +114,7 @@ pub fn blocked_id_pairs_sql(
     source_dataset_col: &str,
     input_table: &str,
     marginals: &[(usize, String)],
+    right_chunk: Option<(u32, u32)>,
 ) -> String {
     // No rules -> cartesian product via a literal 1=1 rule (Splink's fallback).
     let fallback;
@@ -134,13 +149,14 @@ pub fn blocked_id_pairs_sql(
             }
             let preceding: Vec<&BlockingRule> = rules[..i].iter().collect();
             format!(
-                "select\n'{match_key}' as match_key,\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {input_table} as l\ninner join {input_table} as r\non\n({rule_sql})\n{where}{exclude}",
+                "select\n'{match_key}' as match_key,\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {input_table} as l\ninner join {input_table} as r\non\n({rule_sql})\n{where}{exclude}{chunk}",
                 match_key = rule.index,
                 uid_l = uid.render("l"),
                 uid_r = uid.render("r"),
                 rule_sql = rule.sql,
                 where = where_condition(uid, link_type, source_dataset_col),
                 exclude = exclude_preceding_sql(rule, &preceding),
+                chunk = right_chunk_filter(uid, right_chunk),
             )
         })
         .collect();
@@ -237,14 +253,16 @@ pub fn marginal_exploded_id_pairs_sql(
     link_type: LinkType,
     source_dataset_col: &str,
     unnested_table: &str,
+    right_chunk: Option<(u32, u32)>,
 ) -> String {
     format!(
-        "select distinct\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {t} as l\ninner join {t} as r\non\n({rule_sql})\n{where}{exclude}",
+        "select distinct\n{uid_l} as join_key_l,\n{uid_r} as join_key_r\nfrom {t} as l\ninner join {t} as r\non\n({rule_sql})\n{where}{exclude}{chunk}",
         uid_l = uid.render("l"),
         uid_r = uid.render("r"),
         t = unnested_table,
         rule_sql = rule.sql,
         where = where_condition(uid, link_type, source_dataset_col),
         exclude = exclude_preceding_sql(rule, preceding),
+        chunk = right_chunk_filter(uid, right_chunk),
     )
 }

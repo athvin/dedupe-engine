@@ -109,6 +109,7 @@ fn labelled_predictions(
             &settings.source_dataset_column,
             concat.templated.as_str(),
             &[],
+            None,
         ),
         crate::stages::block::BLOCKED_ID_PAIRS,
     );

@@ -30,6 +30,9 @@ pub enum Command {
     CountComparisons(CountComparisonsArgs),
     /// List the DuckLake catalog's snapshots (version + timestamp).
     Snapshots(SnapshotsArgs),
+    /// Run DuckLake catalog maintenance: compaction, snapshot expiry, delete-
+    /// file rewrite, orphan cleanup, and option setting.
+    Maintenance(MaintenanceArgs),
     /// Strict rule-based linkage: candidate pairs from blocking rules, no
     /// probabilistic scoring.
     DeterministicLink(DeterministicLinkArgs),
@@ -143,6 +146,11 @@ pub struct PredictArgs {
     /// Also write output to this Parquet file (when not using a lake).
     #[arg(long)]
     pub output_parquet: Option<String>,
+    /// Score the candidate pairs in this many bounded-memory hash passes
+    /// (default 1 = single shot). Raise it when the pair set is too large to
+    /// score at once; the result is identical. See PERFORMANCE.md.
+    #[arg(long, default_value_t = 1)]
+    pub num_chunks: u32,
 }
 
 #[derive(Args, Debug)]
@@ -213,6 +221,52 @@ pub struct ClusterNewArgs {
 pub struct SnapshotsArgs {
     #[command(flatten)]
     pub source: InputSource,
+}
+
+#[derive(Args, Debug)]
+pub struct MaintenanceArgs {
+    #[command(flatten)]
+    pub source: InputSource,
+    /// Run a full CHECKPOINT (flush inlined -> expire -> merge -> rewrite ->
+    /// cleanup -> delete orphans), bounded by the catalog options below.
+    #[arg(long)]
+    pub checkpoint: bool,
+    /// Flush inlined (catalog-resident) rows out to Parquet.
+    #[arg(long)]
+    pub flush_inlined: bool,
+    /// Merge small adjacent data files (tiered compaction).
+    #[arg(long)]
+    pub merge_adjacent: bool,
+    /// Max output file size (bytes) for --merge-adjacent.
+    #[arg(long)]
+    pub max_file_size: Option<u64>,
+    /// Max files compacted per table for --merge-adjacent (bounds memory).
+    #[arg(long)]
+    pub max_compacted_files: Option<u64>,
+    /// Rewrite delete-heavy files for this table (repeatable).
+    #[arg(long = "rewrite-table")]
+    pub rewrite_tables: Vec<String>,
+    /// Delete files unreferenced by live snapshots.
+    #[arg(long)]
+    pub cleanup_old_files: bool,
+    /// Delete files in the data path unknown to the catalog.
+    #[arg(long)]
+    pub delete_orphaned_files: bool,
+    /// Set `expire_older_than` (e.g. `7 days`) before running.
+    #[arg(long)]
+    pub expire_older_than: Option<String>,
+    /// Set `delete_older_than` (e.g. `2 days`) before running.
+    #[arg(long)]
+    pub delete_older_than: Option<String>,
+    /// Set `target_file_size` (e.g. `512MB`) before running.
+    #[arg(long)]
+    pub target_file_size: Option<String>,
+    /// Set an arbitrary catalog option as KEY=VALUE (repeatable).
+    #[arg(long = "set")]
+    pub set_options: Vec<String>,
+    /// Print all catalog options and exit.
+    #[arg(long)]
+    pub list_options: bool,
 }
 
 #[derive(Args, Debug)]

@@ -90,11 +90,14 @@ configuration, not code: `SessionOptions` exposes `threads`, `memory_limit`,
 `temp_directory` (disk spilling for larger-than-RAM workloads), and
 `preserve_insertion_order`, with `parity()` / `performance()` presets (CLI:
 `--threads`, `--memory-limit`, `--temp-dir`). On an 8-core box the scoring-heavy
-predict path scales ~3.2×; output-bound blocking does not. DuckLake has no
-secondary indexes, but `write_to_lake_with` supports `partition_by` and
-`order_by` (CLI `--partition-by` / `--order-by`) for read pruning and
-clustering-key-style zone-map tightening. Benchmarks (`cargo bench`), the
-profiling harness (`examples/profile_predict.rs`), and the full write-up are in
+predict path scales ~3.2×; output-bound blocking does not. When a candidate set
+is too large to score at once, `dedupe predict --num-chunks N` scores it in N
+bounded-memory hash passes with an identical result. DuckLake has no secondary
+indexes, but `write_to_lake_with` supports `partition_by` and `order_by` (CLI
+`--partition-by` / `--order-by`) for read pruning and clustering-key-style
+zone-map tightening, and `dedupe maintenance` runs catalog compaction / snapshot
+expiry / delete-file rewrite. Benchmarks (`cargo bench`), the profiling harness
+(`examples/profile_predict.rs`), and the full write-up are in
 [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Usage

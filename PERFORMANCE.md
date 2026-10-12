@@ -82,6 +82,22 @@ let session = Session::open_in_memory(
 )?;
 ```
 
+### Chunked predict (bounded-memory scoring)
+
+When the candidate-pair set is too large to block-and-score in one shot — even
+with spilling — split predict into **hash chunks**:
+`predict::run_predict_chunked(.., num_chunks)` / `Linker::predict_chunked(..)`
+(CLI `dedupe predict --num-chunks N`). Pass `i` scores only the pairs whose
+*right* record satisfies `hash(uid_r) % N == i`, and the passes are unioned.
+Because the dedupe where-clause fixes `uid_l < uid_r`, every pair has one right
+record, so each pair lands in exactly one chunk — **the result is byte-identical
+to the single-shot path** (`parity_chunking.rs` asserts chunked == golden),
+while the blocked-pairs and scoring intermediates for one pass are ~`1/N` of the
+whole. The concat and TF tables are built once and reused across passes. `N = 1`
+is the default and dispatches straight to the unchunked path. This mirrors
+Splink's `num_chunks` (RHS hash chunking), deliberately defaulted to 1 so parity
+is preserved until you opt into chunking.
+
 ## DuckLake layout: partitioning & "clustering keys"
 
 DuckLake stores tables as Parquet files with a SQL catalog. It has **no
@@ -103,6 +119,37 @@ Important scope: these speed up **reads from / writes to the lake**, not the
 in-engine blocking join. Blocking runs on native temp tables (DuckLake cannot
 host temp tables), so partition the *inputs* you filter on (incremental
 batches) and the *outputs* consumers query, not the scratch space.
+
+## DuckLake maintenance
+
+Read and write performance degrade as small files, delete files, and old
+snapshots accumulate — so maintenance is a first-order performance lever, not an
+afterthought. `dedupe maintenance --catalog <…>` wraps DuckLake's maintenance
+functions (each also on `Session`):
+
+| Flag | Action |
+|------|--------|
+| `--checkpoint` | full `CHECKPOINT`: flush inlined → expire → merge → rewrite → cleanup → delete orphans |
+| `--flush-inlined` | flush catalog-resident rows out to Parquet |
+| `--merge-adjacent [--max-file-size N] [--max-compacted-files N]` | compact small files (bounded, for tiered compaction) |
+| `--rewrite-table T` | rewrite a table's delete-heavy files |
+| `--expire-older-than '7 days'` / `--delete-older-than '2 days'` / `--target-file-size 512MB` | set catalog options, then act |
+| `--set KEY=VALUE` | set an arbitrary catalog option (e.g. `parquet_compression=zstd`) |
+| `--cleanup-old-files` / `--delete-orphaned-files` | reclaim unreferenced / orphaned files |
+| `--list-options` | print catalog options and exit |
+
+Run it as a **single scheduled job**, never from every writer. A typical split:
+a frequent bounded `--merge-adjacent` + `--flush-inlined`, and a nightly
+`--checkpoint` with `--expire-older-than` set well above your longest
+transaction. The command prints per-table `files`/`delete_files` before→after so
+you can see compaction take effect.
+
+```sh
+# Nightly full maintenance
+dedupe maintenance --catalog meta.ducklake --data-path ./data \
+  --expire-older-than '7 days' --delete-older-than '2 days' \
+  --target-file-size 512MB --checkpoint
+```
 
 ## Profiling
 

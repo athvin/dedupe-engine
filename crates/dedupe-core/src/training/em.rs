@@ -215,6 +215,7 @@ fn materialize_training_vectors(
             &settings.source_dataset_column,
             concat.templated.as_str(),
             &[],
+            None,
         ),
         BLOCKED_ID_PAIRS,
     );

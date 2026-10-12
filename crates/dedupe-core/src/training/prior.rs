@@ -77,6 +77,7 @@ pub fn estimate_prior(
             &model.settings.source_dataset_column,
             concat.templated.as_str(),
             &[],
+            None,
         ),
         "__splink__deterministic_blocked",
     );

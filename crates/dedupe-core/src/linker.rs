@@ -130,6 +130,53 @@ impl<'a> Linker<'a> {
         self.session.materialize(&pipeline)
     }
 
+    /// As [`predict`](Self::predict), but scores the candidate pairs in
+    /// `num_chunks` bounded-memory passes (`hash(uid_r) % num_chunks`) and
+    /// unions them. The result is identical to `predict`; `num_chunks <= 1`
+    /// dispatches straight to it. Reuses this linker's already-materialized
+    /// concat and TF tables across passes. See PERFORMANCE.md.
+    pub fn predict_chunked(
+        &self,
+        threshold_match_probability: Option<f64>,
+        num_chunks: u32,
+    ) -> Result<TableHandle> {
+        if num_chunks <= 1 {
+            return self.predict(threshold_match_probability);
+        }
+        let threshold_mw = threshold_match_probability.and_then(prob_threshold_to_mw);
+        let mut acc: Option<TableHandle> = None;
+        for i in 0..num_chunks {
+            let blocked = predict::materialize_blocked_pairs_chunk(
+                self.session,
+                &self.model.settings,
+                &self.concat,
+                Some((i, num_chunks)),
+            )?;
+            let pipeline = predict::predict_pipeline(
+                &self.model.settings,
+                &self.concat,
+                &self.tf_tables,
+                &blocked,
+                threshold_mw,
+            )?;
+            let part = self.session.materialize(&pipeline)?;
+            self.session.drop_table(&blocked)?;
+            match &acc {
+                None => acc = Some(part),
+                Some(a) => {
+                    self.session.execute_batch(&format!(
+                        "INSERT INTO {} SELECT * FROM {}",
+                        a.physical, part.physical
+                    ))?;
+                    self.session.drop_table(&part)?;
+                }
+            }
+        }
+        acc.ok_or_else(|| {
+            crate::error::DedupeError::Other("predict produced no chunks".to_string())
+        })
+    }
+
     /// Cluster predictions at a probability threshold and join back to inputs.
     pub fn cluster(
         &self,

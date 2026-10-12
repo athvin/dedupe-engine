@@ -5,8 +5,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use args::{
     AccuracyArgs, Cli, ClusterArgs, ClusterNewArgs, Command, CountComparisonsArgs,
-    DeterministicLinkArgs, InputSource, LinkNewArgs, LinkNewScope, PredictArgs, ProfileArgs,
-    SnapshotsArgs, TrainArgs,
+    DeterministicLinkArgs, InputSource, LinkNewArgs, LinkNewScope, MaintenanceArgs, PredictArgs,
+    ProfileArgs, SnapshotsArgs, TrainArgs,
 };
 use clap::Parser;
 use dedupe_core::accuracy::{AccuracyOptions, truth_space_from_labels_column};
@@ -36,6 +36,7 @@ fn run() -> Result<()> {
         Command::Accuracy(a) => accuracy(a),
         Command::CountComparisons(a) => count_comparisons(a),
         Command::Snapshots(a) => snapshots(a),
+        Command::Maintenance(a) => maintenance(a),
         Command::DeterministicLink(a) => deterministic_link(a),
         Command::Profile(a) => profile_columns(a),
     }
@@ -106,6 +107,91 @@ fn snapshots(a: SnapshotsArgs) -> Result<()> {
         .map(|s| serde_json::json!({"version": s.version, "timestamp": s.timestamp}))
         .collect();
     println!("{}", serde_json::to_string(&json)?);
+    Ok(())
+}
+
+fn maintenance(a: MaintenanceArgs) -> Result<()> {
+    if a.source.catalog.is_none() {
+        bail!("maintenance requires --catalog (a DuckLake catalog)");
+    }
+    let session = open_session(&a.source)?;
+
+    if a.list_options {
+        for (name, value) in session.lake_options()? {
+            println!("{name} = {value}");
+        }
+        return Ok(());
+    }
+
+    // Apply catalog options first (they steer CHECKPOINT's expire/merge steps).
+    if let Some(v) = &a.expire_older_than {
+        session.set_lake_option("expire_older_than", v)?;
+    }
+    if let Some(v) = &a.delete_older_than {
+        session.set_lake_option("delete_older_than", v)?;
+    }
+    if let Some(v) = &a.target_file_size {
+        session.set_lake_option("target_file_size", v)?;
+    }
+    for kv in &a.set_options {
+        let (k, v) = kv
+            .split_once('=')
+            .with_context(|| format!("--set must be KEY=VALUE, got `{kv}`"))?;
+        session.set_lake_option(k, v)?;
+    }
+
+    let before = session.lake_table_stats()?;
+
+    // Individual steps (skipped by a full checkpoint, which runs them all).
+    let mut ran: Vec<String> = Vec::new();
+    if a.checkpoint {
+        session.checkpoint_lake()?;
+        ran.push("checkpoint".into());
+    } else {
+        if a.flush_inlined {
+            session.flush_inlined_data()?;
+            ran.push("flush-inlined".into());
+        }
+        if a.merge_adjacent {
+            session.merge_adjacent_files(a.max_file_size, a.max_compacted_files)?;
+            ran.push("merge-adjacent".into());
+        }
+        for table in &a.rewrite_tables {
+            session.rewrite_data_files(table)?;
+            ran.push(format!("rewrite:{table}"));
+        }
+        if let Some(v) = &a.expire_older_than {
+            session.expire_snapshots(v)?;
+            ran.push("expire-snapshots".into());
+        }
+        if a.cleanup_old_files {
+            session.cleanup_old_files()?;
+            ran.push("cleanup-old-files".into());
+        }
+        if a.delete_orphaned_files {
+            session.delete_orphaned_files()?;
+            ran.push("delete-orphaned-files".into());
+        }
+    }
+
+    if ran.is_empty() {
+        bail!(
+            "no maintenance action requested; pass --checkpoint or one of \
+             --flush-inlined / --merge-adjacent / --rewrite-table / \
+             --cleanup-old-files / --delete-orphaned-files (or --list-options)"
+        );
+    }
+
+    let after = session.lake_table_stats()?;
+    eprintln!("ran: {}", ran.join(", "));
+    for (name, fc, dc) in &after {
+        let (bf, bd) = before
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map_or((0, 0), |(_, f, d)| (*f, *d));
+        eprintln!("  {name}: files {bf}->{fc}, delete_files {bd}->{dc}");
+    }
+    println!("{}", ran.len());
     Ok(())
 }
 
@@ -259,7 +345,7 @@ fn predict(a: PredictArgs) -> Result<()> {
     let inputs = resolve_inputs(&session, &a.source)?;
 
     let linker = build_linker(&session, settings, &inputs)?;
-    let predictions = linker.predict(a.threshold_match_probability)?;
+    let predictions = linker.predict_chunked(a.threshold_match_probability, a.num_chunks)?;
     let n = session.count(&predictions.physical)?;
 
     if let Some(path) = &a.output_parquet {

@@ -88,6 +88,7 @@ pub fn estimate_m_from_label_column(
             &model.settings.source_dataset_column,
             concat.templated.as_str(),
             &[],
+            None,
         ),
         BLOCKED_ID_PAIRS,
     );

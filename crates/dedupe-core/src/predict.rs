@@ -72,6 +72,20 @@ pub fn materialize_blocked_pairs(
     settings: &Settings,
     concat: &TableHandle,
 ) -> Result<TableHandle> {
+    materialize_blocked_pairs_chunk(session, settings, concat, None)
+}
+
+/// As [`materialize_blocked_pairs`], but restricted to one hash chunk of the
+/// right-hand records (`right_chunk = Some((i, n))` keeps pairs whose right
+/// record satisfies `hash(uid_r) % n == i`). `None` (or `n == 1`) blocks every
+/// pair, byte-identical to the unchunked path. Used by [`run_predict_chunked`]
+/// to process a large candidate set in bounded-memory passes.
+pub fn materialize_blocked_pairs_chunk(
+    session: &Session,
+    settings: &Settings,
+    concat: &TableHandle,
+    right_chunk: Option<(u32, u32)>,
+) -> Result<TableHandle> {
     let uid = uid_expr_for(settings);
     let rules = &settings.blocking_rules;
 
@@ -89,13 +103,14 @@ pub fn materialize_blocked_pairs(
                 &settings.source_dataset_column,
                 DF_CONCAT,
                 &[],
+                right_chunk,
             ),
             BLOCKED_ID_PAIRS,
         );
         return session.materialize(&p);
     }
 
-    materialize_blocked_pairs_exploding(session, settings, concat, &uid)
+    materialize_blocked_pairs_exploding(session, settings, concat, &uid, right_chunk)
 }
 
 /// Exploding-rule path: materialize each exploding rule's marginal id-pairs
@@ -103,12 +118,16 @@ pub fn materialize_blocked_pairs(
 /// "AND NOT preceding" exclusion), then UNION ALL all arms into
 /// `__splink__blocked_id_pairs_non_unique` and collapse to unique pairs by
 /// `min(match_key)`. Mirrors Splink's `block_using_rules_sqls` +
-/// `materialise_exploded_id_tables`.
+/// `materialise_exploded_id_tables`. `right_chunk` filters both the scalar arms
+/// and the marginal self-joins on the right record's hash; since a pair's right
+/// record is fixed (`uid_l < uid_r`), both arms land in the same chunk, so the
+/// per-chunk `min(match_key)` dedup stays correct.
 fn materialize_blocked_pairs_exploding(
     session: &Session,
     settings: &Settings,
     concat: &TableHandle,
     uid: &crate::stages::UidExpr,
+    right_chunk: Option<(u32, u32)>,
 ) -> Result<TableHandle> {
     let rules = &settings.blocking_rules;
     let sd_col = if settings.source_dataset_required() {
@@ -134,6 +153,7 @@ fn materialize_blocked_pairs_exploding(
             settings.link_type,
             &settings.source_dataset_column,
             block::DF_CONCAT_UNNESTED,
+            right_chunk,
         );
         let mut mp = CtePipeline::new().with_input(concat);
         mp.enqueue(unnest_sql, block::DF_CONCAT_UNNESTED);
@@ -160,6 +180,7 @@ fn materialize_blocked_pairs_exploding(
             &settings.source_dataset_column,
             DF_CONCAT,
             &marginal_refs,
+            right_chunk,
         ),
         block::BLOCKED_ID_PAIRS_NON_UNIQUE,
     );
@@ -272,4 +293,58 @@ pub fn run_predict(
         threshold_match_weight,
     )?;
     session.materialize(&pipeline)
+}
+
+/// Run predict in `num_chunks` bounded-memory passes. Pass `i` scores only the
+/// candidate pairs whose *right* record hashes to chunk `i` (`hash(uid_r) % n ==
+/// i`); the passes are unioned into one result. The output is identical to
+/// [`run_predict`] — each pair belongs to exactly one chunk — so this is a pure
+/// memory/scaling lever, not a semantic change (`num_chunks <= 1` dispatches
+/// straight to `run_predict`). Chunking bounds the peak working set: the blocked
+/// pairs and scoring intermediates for one pass are ~`1/num_chunks` of the whole,
+/// so a candidate set too large to score in a single shot still completes. The
+/// concat and TF tables are built once and shared across passes. See
+/// PERFORMANCE.md.
+pub fn run_predict_chunked(
+    session: &Session,
+    settings: &Settings,
+    input: &TableHandle,
+    threshold_match_weight: Option<f64>,
+    num_chunks: u32,
+) -> Result<TableHandle> {
+    if num_chunks <= 1 {
+        return run_predict(session, settings, input, threshold_match_weight);
+    }
+    let concat = materialize_concat(session, input)?;
+    let tf_tables = materialize_tf_tables(session, settings, &concat)?;
+
+    // First pass seeds the accumulator table; later passes INSERT into it and
+    // drop their own per-pass output, so only one pass's intermediates plus the
+    // growing result are live at a time.
+    let mut acc: Option<TableHandle> = None;
+    for i in 0..num_chunks {
+        let blocked =
+            materialize_blocked_pairs_chunk(session, settings, &concat, Some((i, num_chunks)))?;
+        let pipeline = predict_pipeline(
+            settings,
+            &concat,
+            &tf_tables,
+            &blocked,
+            threshold_match_weight,
+        )?;
+        let part = session.materialize(&pipeline)?;
+        session.drop_table(&blocked)?;
+        match &acc {
+            None => acc = Some(part),
+            Some(a) => {
+                session.execute_batch(&format!(
+                    "INSERT INTO {} SELECT * FROM {}",
+                    a.physical, part.physical
+                ))?;
+                session.drop_table(&part)?;
+            }
+        }
+    }
+    // num_chunks >= 2 runs at least one pass, so acc is always Some here.
+    acc.ok_or_else(|| crate::error::DedupeError::Other("predict produced no chunks".to_string()))
 }

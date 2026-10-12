@@ -341,6 +341,147 @@ impl Session {
         })
     }
 
+    // --- DuckLake maintenance (require an attached writable lake) -------------
+    // Thin wrappers over DuckLake's catalog-maintenance functions. See
+    // PERFORMANCE.md and the `dedupe maintenance` CLI subcommand.
+
+    /// Set a DuckLake catalog option (persisted in the catalog), e.g.
+    /// `("parquet_compression", "zstd")` or `("target_file_size", "512MB")`.
+    pub fn set_lake_option(&self, key: &str, value: &str) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn.execute_batch(&format!(
+            "CALL {}.set_option('{}', '{}');",
+            lake.alias,
+            key.replace('\'', "''"),
+            value.replace('\'', "''"),
+        ))?;
+        Ok(())
+    }
+
+    /// All DuckLake catalog options as `(option_name, value)` (global scope).
+    pub fn lake_options(&self) -> Result<Vec<(String, String)>> {
+        let lake = self.lake()?;
+        let rows = self.query_strings(&format!(
+            "SELECT option_name, value FROM {}.options() ORDER BY option_name",
+            lake.alias
+        ))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r[0].clone(), r.get(1).cloned().unwrap_or_default()))
+            .collect())
+    }
+
+    /// Per-table file counts: `(table_name, file_count, delete_file_count)`.
+    /// Useful before/after maintenance to see compaction effect.
+    pub fn lake_table_stats(&self) -> Result<Vec<(String, i64, i64)>> {
+        let lake = self.lake()?;
+        let rows = self.query_strings(&format!(
+            "SELECT table_name, file_count, delete_file_count \
+             FROM ducklake_table_info('{}') ORDER BY table_name",
+            lake.alias
+        ))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r[0].clone(),
+                    r[1].parse().unwrap_or(0),
+                    r[2].parse().unwrap_or(0),
+                )
+            })
+            .collect())
+    }
+
+    /// Run a full `CHECKPOINT`: flush inlined data, expire snapshots, merge
+    /// adjacent files, rewrite delete-heavy files, clean up and delete orphans
+    /// — bounded by the catalog's `expire_older_than` / `delete_older_than` /
+    /// `rewrite_delete_threshold` options.
+    pub fn checkpoint_lake(&self) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn
+            .execute_batch(&format!("CHECKPOINT {};", lake.alias))?;
+        Ok(())
+    }
+
+    /// Flush inlined (catalog-resident) rows out to Parquet data files.
+    pub fn flush_inlined_data(&self) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn.execute_batch(&format!(
+            "CALL ducklake_flush_inlined_data('{}');",
+            lake.alias
+        ))?;
+        Ok(())
+    }
+
+    /// Merge small adjacent data files (without expiring snapshots). Bound the
+    /// work per table with `max_file_size` (bytes) and `max_compacted_files`
+    /// for tiered compaction.
+    pub fn merge_adjacent_files(
+        &self,
+        max_file_size: Option<u64>,
+        max_compacted_files: Option<u64>,
+    ) -> Result<()> {
+        let lake = self.lake()?;
+        let mut args = vec![format!("'{}'", lake.alias)];
+        if let Some(m) = max_file_size {
+            args.push(format!("max_file_size => {m}"));
+        }
+        if let Some(m) = max_compacted_files {
+            args.push(format!("max_compacted_files => {m}"));
+        }
+        self.conn.execute_batch(&format!(
+            "CALL ducklake_merge_adjacent_files({});",
+            args.join(", ")
+        ))?;
+        Ok(())
+    }
+
+    /// Expire snapshots older than an interval, e.g. `"7 days"`. Keep this well
+    /// above your longest running transaction.
+    pub fn expire_snapshots(&self, older_than: &str) -> Result<()> {
+        let lake = self.lake()?;
+        // Cast to a zone-less TIMESTAMP: the bundled DuckDB omits ICU, so
+        // `now()` (TIMESTAMP WITH TIME ZONE) has no `- INTERVAL` binding.
+        self.conn.execute_batch(&format!(
+            "CALL ducklake_expire_snapshots('{}', older_than => now()::TIMESTAMP - INTERVAL '{}');",
+            lake.alias,
+            older_than.replace('\'', "''"),
+        ))?;
+        Ok(())
+    }
+
+    /// Rewrite a table's data files whose deleted fraction exceeds the catalog's
+    /// `rewrite_delete_threshold`, reclaiming space from heavy deletes/updates.
+    pub fn rewrite_data_files(&self, table: &str) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn.execute_batch(&format!(
+            "CALL ducklake_rewrite_data_files('{}', '{}');",
+            lake.alias,
+            table.replace('\'', "''"),
+        ))?;
+        Ok(())
+    }
+
+    /// Delete data files no longer referenced by any live snapshot.
+    pub fn cleanup_old_files(&self) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn.execute_batch(&format!(
+            "CALL ducklake_cleanup_old_files('{}', cleanup_all => true);",
+            lake.alias
+        ))?;
+        Ok(())
+    }
+
+    /// Delete files present in the data path but unknown to the catalog.
+    pub fn delete_orphaned_files(&self) -> Result<()> {
+        let lake = self.lake()?;
+        self.conn.execute_batch(&format!(
+            "CALL ducklake_delete_orphaned_files('{}', cleanup_all => true);",
+            lake.alias
+        ))?;
+        Ok(())
+    }
+
     fn next_physical(&self, templated: &str) -> String {
         let seq = self.seq.get();
         self.seq.set(seq + 1);
