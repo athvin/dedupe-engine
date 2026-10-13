@@ -169,10 +169,11 @@ train + predict + cluster at scale, gated behind `DEDUPE_SCALE_TESTS=1`).
 Golden baselines live in `fixtures/golden/` and are **frozen**: they are the
 engine's expected-output spec, and changing them is a deliberate,
 reviewed act. A `MANIFEST.json` records sha256 hashes of every golden; a test
-fails if any golden drifts. `dedupe-core` bundles DuckDB 1.5.5 via the
-`duckdb` crate — the same DuckDB build the baselines were generated on — so
-results match byte-for-byte (golden tests additionally pin `threads = 1` to
-keep float aggregation order stable).
+fails if any golden drifts. `dedupe-core` bundles an exact-pinned DuckDB
+(currently 1.5.6) via the `duckdb` crate; the baselines were generated on
+1.5.5 and every pin bump is verified byte-for-byte against the full golden
+suite before landing (golden tests additionally pin `threads = 1` to keep
+float aggregation order stable).
 
 ## Design notes
 
