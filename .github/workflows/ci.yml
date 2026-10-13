@@ -7,50 +7,81 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Incremental compilation only bloats CI caches: every run starts from the
+  # restored cache, never from its own previous incremental state.
+  CARGO_INCREMENTAL: "0"
+  # Route the bundled DuckDB's C++ compile through sccache (GHA backend). The
+  # cc crate honors wrapper-style CC/CXX. This makes any rebuild of the C++ —
+  # doc-mode units (which don't share the build-script run with test builds),
+  # Cargo.lock bumps that rotate the cargo cache key, cold caches — a ~1min
+  # object-cache replay instead of a ~15min compile.
+  SCCACHE_GHA_ENABLED: "true"
+  CC: sccache cc
+  CXX: sccache c++
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Cache strategy: the test-mode jobs (test / e2e / scale) build the same
+# dev-profile dependency set, so they share ONE rust-cache entry
+# (`shared-key: dev`). All of them must therefore also build with workspace
+# feature unification — a bare `-p <crate>` can resolve different features
+# and silently rebuild the entire DuckDB chain, which is why the e2e job
+# selects its tests with a nextest filterset instead of `-p`. The lint job
+# keeps its own key: clippy/rustdoc produce check- and doc-mode artifacts the
+# test cache never contains. `cache-on-failure` keeps a long cold build from
+# being thrown away just because a later step failed.
+
 jobs:
   lint:
     name: fmt + clippy + docs
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+          cache-on-failure: true
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # --all-targets also gates that benches and examples still compile; the
+      # old standalone "benchmarks (compile)" job built a second,
+      # release-profile DuckDB for no additional signal.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: rustdoc (deny warnings)
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --workspace --no-deps --document-private-items --locked
         env:
           RUSTDOCFLAGS: "-D warnings"
 
   test:
     name: test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-
-  bench-compile:
-    name: benchmarks (compile)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Keep benches building; running them is manual (they take minutes).
-      - run: cargo bench -p dedupe-core --no-run
+        with:
+          shared-key: dev
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
+      # nextest runs the ~20 integration-test binaries in parallel; plain
+      # `cargo test` runs them one binary at a time.
+      - run: cargo nextest run --workspace --locked
+      # nextest does not run doctests; keep them covered (currently zero, and
+      # this is free once the build is cached).
+      - run: cargo test --workspace --doc --locked
 
   security:
     name: cargo-deny (advisories + licenses + bans)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -60,29 +91,46 @@ jobs:
   ducklake-e2e:
     name: DuckLake + extensions e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       DEDUPE_E2E_DUCKLAKE: "1"
       DEDUPE_E2E_EXTENSIONS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dev
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
       - name: Cache DuckDB extensions
         uses: actions/cache@v4
         with:
           path: ~/.duckdb/extensions
           key: duckdb-extensions-${{ hashFiles('Cargo.toml') }}
-      - run: cargo test -p dedupe-cli
+      # Workspace build scope + filterset (NOT `-p dedupe-cli`): keeps feature
+      # unification identical to the `test` job so the shared cache applies.
+      - run: cargo nextest run --workspace --locked -E 'package(dedupe-cli)'
       - name: Extension loading (rapidfuzz)
-        run: cargo test -p dedupe-core --test extensions
+        run: cargo nextest run --workspace --locked -E 'package(dedupe-core) & binary(extensions)'
 
   scale-tests:
     name: scale golden (50k)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       DEDUPE_SCALE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p dedupe-core --test golden_historical_50k
+        with:
+          shared-key: dev
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
+      # `-p dedupe-core` resolves the same features as the workspace union
+      # (verified: warm cache fully reused), so the narrow build is safe here
+      # and links only this one test binary.
+      - run: cargo nextest run -p dedupe-core --test golden_historical_50k --locked

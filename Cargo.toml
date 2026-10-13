@@ -48,6 +48,16 @@ manual_midpoint = "allow"
 # value (they own the parsed config); borrowing would just add noise.
 needless_pass_by_value = "allow"
 
+# The bundled DuckDB C++ (libduckdb-sys) is the engine's entire compute path.
+# Build it optimized even in dev/test profiles — otherwise every `cargo test`
+# runs an -O0 database and the golden suites crawl. The extra compile cost is
+# paid once per dependency change and then cached (locally and in CI);
+# IEEE float semantics are unaffected (no fast-math), so golden results are
+# identical. The pure-Rust wrapper and our own crates stay at dev opt-level
+# for fast edit-compile cycles.
+[profile.dev.package.libduckdb-sys]
+opt-level = 3
+
 [workspace.dependencies]
 # Bundles DuckDB 1.5.5 — the exact engine version the golden fixtures were
 # generated on, so the engine and the baselines execute on identical builds.
